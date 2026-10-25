@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -126,7 +127,11 @@ func (s *Service) execute(raw json.RawMessage) (any, error) {
 	if err != nil {
 		elapsed := time.Since(started).Milliseconds()
 		s.recordFailure(c.ID, r.Model, err.Error())
-		s.log("error", r.Model, c.ID, statusOf(err), elapsed, err.Error())
+		s.logRequest(logEntry{
+			Level: "error", Model: r.Model, Upstream: upstream, AuthID: c.ID,
+			Status: statusOf(err), Millis: elapsed, FirstByteMs: elapsed,
+			Detail: err.Error(),
+		})
 		return nil, err
 	}
 	defer cancel()
@@ -136,19 +141,33 @@ func (s *Service) execute(raw json.RawMessage) (any, error) {
 	elapsed := time.Since(started).Milliseconds()
 	if readErr != nil {
 		s.recordFailure(c.ID, r.Model, readErr.Error())
-		s.log("error", r.Model, c.ID, 0, elapsed, "read upstream response: "+readErr.Error())
+		s.logRequest(logEntry{
+			Level: "error", Model: r.Model, Upstream: upstream, AuthID: c.ID,
+			Status: resp.StatusCode, Millis: elapsed, FirstByteMs: elapsed,
+			Detail: "read upstream response: " + readErr.Error(),
+		})
 		return nil, fail(502, "reading River response failed: "+readErr.Error())
 	}
 	if resp.StatusCode >= 400 {
 		mapped := mapUpstreamStatus(resp.StatusCode, payload)
 		s.recordFailure(c.ID, r.Model, mapped.Error())
-		s.log("error", r.Model, c.ID, resp.StatusCode, elapsed, mapped.Error())
+		s.logRequest(logEntry{
+			Level: "error", Model: r.Model, Upstream: upstream, AuthID: c.ID,
+			Status: resp.StatusCode, Millis: elapsed, FirstByteMs: elapsed,
+			Detail: mapped.Error(),
+		})
 		return nil, mapped
 	}
 
 	usage := usageFromBody(payload)
 	s.recordSuccess(c.ID, r.Model, upstream, usage)
-	s.log("info", r.Model, c.ID, resp.StatusCode, elapsed, summariseUsage(usage))
+	entry := logEntry{
+		Model: r.Model, Upstream: upstream, AuthID: c.ID,
+		Status: resp.StatusCode, Millis: elapsed, FirstByteMs: elapsed,
+		Detail: summariseUsage(usage),
+	}
+	entry.fillUsage(usage)
+	s.logRequest(entry)
 
 	return executorResponse{
 		Payload: payload,
@@ -187,10 +206,16 @@ func (s *Service) executeStream(raw json.RawMessage) (any, error) {
 
 	// Streaming bypasses the per-request timeout: River can legitimately take
 	// many minutes, and the host enforces its own stream deadlines.
+	started := time.Now()
 	resp, cancel, err := s.postUpstream(context.Background(), c, upstream, body, true)
 	if err != nil {
+		elapsed := time.Since(started).Milliseconds()
 		s.recordFailure(c.ID, r.Model, err.Error())
-		s.log("error", r.Model, c.ID, statusOf(err), 0, err.Error())
+		s.logRequest(logEntry{
+			Level: "error", Model: r.Model, Upstream: upstream, AuthID: c.ID,
+			Status: statusOf(err), Millis: elapsed, FirstByteMs: elapsed,
+			Stream: true, Detail: err.Error(),
+		})
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
@@ -199,7 +224,12 @@ func (s *Service) executeStream(raw json.RawMessage) (any, error) {
 		cancel()
 		mapped := mapUpstreamStatus(resp.StatusCode, payload)
 		s.recordFailure(c.ID, r.Model, mapped.Error())
-		s.log("error", r.Model, c.ID, resp.StatusCode, 0, mapped.Error())
+		s.logRequest(logEntry{
+			Level: "error", Model: r.Model, Upstream: upstream, AuthID: c.ID,
+			Status: resp.StatusCode, Millis: time.Since(started).Milliseconds(),
+			FirstByteMs: time.Since(started).Milliseconds(),
+			Stream:      true, Detail: mapped.Error(),
+		})
 		return nil, mapped
 	}
 
@@ -207,7 +237,7 @@ func (s *Service) executeStream(raw json.RawMessage) (any, error) {
 	// output is still reported through the RPC envelope instead of surfacing as
 	// a truncated stream. Emits are acknowledged by the host one at a time.
 	ready := make(chan error, 1)
-	go s.pumpStream(c, r, upstream, resp.Body, ready, time.Now(), cancel)
+	go s.pumpStream(c, r, upstream, resp.Body, ready, started, cancel)
 	if err := <-ready; err != nil {
 		return nil, err
 	}
@@ -232,6 +262,10 @@ func (s *Service) pumpStream(c Credential, r executorStreamRequest, upstream str
 	var usage *Usage
 	var sawDone bool
 	announced := false
+	// firstByteMs is time-to-first-token as observed by this plugin: the
+	// moment the first content frame is forwarded. River does not report it
+	// and CPA cannot see inside the stream, so it has to be measured here.
+	var firstByteMs int64
 
 	// emit pushes one frame; the first successful one releases the caller.
 	emit := func(payload []byte) error {
@@ -243,6 +277,7 @@ func (s *Service) pumpStream(c Credential, r executorStreamRequest, upstream str
 		}
 		if !announced {
 			announced = true
+			firstByteMs = time.Since(started).Milliseconds()
 			ready <- nil
 		}
 		return nil
@@ -260,7 +295,11 @@ func (s *Service) pumpStream(c Credential, r executorStreamRequest, upstream str
 		if rec := recover(); rec != nil {
 			msg := "stream handler panicked"
 			s.recordFailure(c.ID, model, msg)
-			s.log("error", model, c.ID, 0, time.Since(started).Milliseconds(), msg)
+			s.logRequest(logEntry{
+				Level: "error", Model: model, Upstream: upstream, AuthID: c.ID,
+				Millis: time.Since(started).Milliseconds(), FirstByteMs: firstByteMs,
+				Stream: true, Detail: msg,
+			})
 			closeStream(fail(502, msg))
 			if !announced {
 				ready <- fail(502, msg)
@@ -275,15 +314,24 @@ func (s *Service) pumpStream(c Credential, r executorStreamRequest, upstream str
 			ready <- err
 			return
 		}
+		total := time.Since(started).Milliseconds()
 		if !sawDone {
 			// A truncated stream must not look like a clean finish.
-			s.log("warn", model, c.ID, 0, time.Since(started).Milliseconds(),
-				"stream ended without [DONE]")
+			s.log("warn", model, c.ID, 0, total, "stream ended without [DONE]")
 		}
 		closeStream(nil)
 		s.recordSuccess(c.ID, model, upstream, usage)
-		s.log("info", model, c.ID, 200, time.Since(started).Milliseconds(),
-			"stream "+summariseUsage(usage))
+		entry := logEntry{
+			Model: model, Upstream: upstream, AuthID: c.ID,
+			Status: 200, Millis: total, FirstByteMs: firstByteMs,
+			Stream: true, Detail: summariseUsage(usage),
+		}
+		if !sawDone {
+			entry.Level = "warn"
+			entry.Detail += " · 未收到 [DONE]"
+		}
+		entry.fillUsage(usage)
+		s.logRequest(entry)
 	}()
 
 	for scanner.Scan() {
@@ -312,15 +360,21 @@ func (s *Service) pumpStream(c Credential, r executorStreamRequest, upstream str
 		}
 		if err := emit(frameBytes); err != nil {
 			s.recordFailure(c.ID, model, "downstream stopped reading the stream")
-			s.log("error", model, c.ID, 0, time.Since(started).Milliseconds(),
-				"stream emit: "+err.Error())
+			s.logRequest(logEntry{
+				Level: "error", Model: model, Upstream: upstream, AuthID: c.ID,
+				Millis: time.Since(started).Milliseconds(), FirstByteMs: firstByteMs,
+				Stream: true, Detail: "stream emit: " + err.Error(),
+			})
 			return
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		s.recordFailure(c.ID, model, err.Error())
-		s.log("error", model, c.ID, 0, time.Since(started).Milliseconds(),
-			"stream read: "+err.Error())
+		s.logRequest(logEntry{
+			Level: "error", Model: model, Upstream: upstream, AuthID: c.ID,
+			Millis: time.Since(started).Milliseconds(), FirstByteMs: firstByteMs,
+			Stream: true, Detail: "stream read: " + err.Error(),
+		})
 		closeStream(fail(502, "River stream read failed: "+err.Error()))
 		if !announced {
 			ready <- fail(502, "River stream read failed: "+err.Error())
@@ -500,6 +554,31 @@ func summariseUsage(u *Usage) string {
 	return "tokens in=" + itoa(u.PromptTokens) +
 		" cached=" + itoa(u.CachedTokens) +
 		" out=" + itoa(u.CompletionTokens)
+}
+
+// fillUsage copies the token counters and derived speed onto a log entry.
+//
+// TokensPerSecond describes generation, not total throughput: it divides the
+// output tokens by the time spent after the first frame arrived, so a long
+// prompt wait does not make a fast model look slow. With no first-byte stamp
+// or no output tokens there is nothing honest to report and the field stays 0.
+func (e *logEntry) fillUsage(u *Usage) {
+	if u == nil {
+		return
+	}
+	e.PromptTokens = u.PromptTokens
+	e.CachedTokens = u.CachedTokens
+	e.CompletionTokens = u.CompletionTokens
+	e.TotalTokens = u.TotalTokens
+	e.CostUSD = u.CostUSD
+	if e.FirstByteMs <= 0 || e.Millis <= e.FirstByteMs || u.CompletionTokens <= 0 {
+		return
+	}
+	seconds := float64(e.Millis-e.FirstByteMs) / 1000
+	if seconds <= 0 {
+		return
+	}
+	e.TokensPerSecond = math.Round(float64(u.CompletionTokens)/seconds*10) / 10
 }
 
 func itoa(v int) string {

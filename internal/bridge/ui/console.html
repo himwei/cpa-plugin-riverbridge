@@ -195,15 +195,74 @@ tr.lvl-error td { color: var(--err); }
 .mdot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); margin-right: 6px; }
 .pager { display: flex; gap: 8px; align-items: center; margin-top: 12px; font-size: 12px; color: var(--muted); }
 .pager .spacer { flex: 1; }
+
+/* Modal for the add-account form. Kept as a dialog so the key field is not
+   sitting on the page in plain sight the moment the tab opens. */
+.modal {
+  position: fixed; inset: 0; z-index: 40;
+  background: rgba(0, 0, 0, .55);
+  display: grid; place-items: center; padding: 20px;
+}
+.modalbox {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  padding: 18px 20px; width: 100%; max-width: 620px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, .45);
+}
+.modalbox .hint { color: var(--muted); font-size: 12.5px; }
+.modalbox .hint a { color: var(--accent); }
+
+/* Log header numbers: one row of the four figures an operator checks first. */
+.statrow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.statrow .s {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px 14px;
+}
+.statrow .s .k { font-size: 11.5px; color: var(--muted); margin-bottom: 6px; }
+.statrow .s .v { font-size: 21px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.3px; }
+.statrow .s .u { font-size: 11.5px; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+/* Segmented time range. Manual only: nothing on this page refreshes itself. */
+.segbar { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+.seg {
+  padding: 5px 13px; font-size: 12.5px; border-radius: 7px;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+}
+.seg.on { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel-2)); font-weight: 500; }
+
+/* One request row: identity on the left, the numbers an operator compares on
+   the right, all aligned so the eye can scan the column. */
+.lrow {
+  display: grid; grid-template-columns: 108px 1fr auto; gap: 4px 16px;
+  padding: 11px 4px; border-bottom: 1px solid var(--line);
+  align-items: start; font-size: 12.5px;
+}
+.lrow:last-child { border-bottom: none; }
+.lrow.err { background: color-mix(in srgb, var(--err) 6%, transparent); }
+.lrow.warn { background: color-mix(in srgb, var(--warn) 6%, transparent); }
+.lrow .when { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; padding-top: 2px; }
+.lrow .main { min-width: 0; }
+.lrow .model { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
+.lrow .sub2 { color: var(--muted); font-size: 11.5px; margin-top: 3px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.lrow .nums { display: flex; gap: 18px; text-align: right; font-variant-numeric: tabular-nums; }
+.lrow .nums .n .k { font-size: 10.5px; color: var(--muted); }
+.lrow .nums .n .v { font-size: 13px; white-space: nowrap; }
+.lrow .nums .n .v.good { color: var(--ok); }
+.lrow .nums .n .v.bad { color: var(--err); }
+.lrow .detail { grid-column: 2 / -1; color: var(--muted); font-size: 11.5px; margin-top: 5px; word-break: break-word; }
+.speed { color: var(--muted); font-size: 11px; }
+.badge.k { font-size: 10.5px; padding: 1px 6px; }
 .kv { display: grid; grid-template-columns: 180px 1fr; gap: 8px 14px; font-size: 13px; }
 .kv .k { color: var(--muted); }
 .kv .v { font-variant-numeric: tabular-nums; }
 @media (max-width: 720px) {
   .row { flex-direction: column; }
   .totals { grid-template-columns: repeat(2, 1fr); }
+  .statrow { grid-template-columns: repeat(2, 1fr); }
   .kv { grid-template-columns: 1fr; }
   .kv .k { font-size: 11px; }
   .tabs { top: 0; position: static; }
+  .lrow { grid-template-columns: 1fr; }
+  .lrow .nums { justify-content: flex-start; gap: 14px; }
 }
 </style>
 </head>
@@ -228,29 +287,40 @@ tr.lvl-error td { color: var(--err); }
 <main>
   <!-- 日志 -->
   <section id="tab-logs">
+    <div class="statrow" id="logStats"></div>
+
     <div class="card">
       <div class="toolbar">
         <h2 style="margin:0">请求日志<span class="hint" id="logHint"></span></h2>
         <div class="spacer"></div>
-        <label class="pill" style="margin:0;cursor:pointer">
-          <input type="checkbox" id="autoRefresh" checked style="width:auto;margin:0"> 自动刷新
-        </label>
+        <button class="primary" id="reloadLogs">刷新</button>
         <button id="exportLogs">导出 NDJSON</button>
         <button class="danger" id="clearLogs">清空</button>
       </div>
+
+      <div class="segbar" id="rangeBar">
+        <button class="seg on" data-range="all">全部</button>
+        <button class="seg" data-range="today">今天</button>
+        <button class="seg" data-range="24h">24 小时</button>
+        <button class="seg" data-range="7d">近 7 天</button>
+        <button class="seg" data-range="30d">近 30 天</button>
+      </div>
+
       <div class="row" style="margin-bottom:12px">
         <div><label>级别</label><select id="fLevel"><option value="all">全部</option></select></div>
         <div><label>账号</label><select id="fAuth"><option value="all">全部</option></select></div>
         <div><label>模型</label><select id="fModel"><option value="all">全部</option></select></div>
+        <div><label>类型</label><select id="fKind">
+          <option value="all">全部</option>
+          <option value="request">仅请求</option>
+          <option value="event">仅事件</option>
+        </select></div>
         <div style="flex:1.4"><label>关键字</label><input type="text" id="fQuery" placeholder="状态码、错误、模型…"></div>
       </div>
-      <div style="overflow:auto">
-        <table id="logsTable">
-          <thead><tr><th style="width:150px">时间</th><th style="width:66px">级别</th><th style="width:60px">状态</th>
-            <th style="width:70px">耗时</th><th>模型</th><th>账号</th><th>详情</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
+
+      <div id="logEmpty" class="empty" style="display:none"></div>
+      <div id="logRows"></div>
+
       <div class="pager">
         <span id="logRange">—</span>
         <div class="spacer"></div>
@@ -263,7 +333,33 @@ tr.lvl-error td { color: var(--err); }
   <!-- 账号配置 -->
   <section id="tab-accounts" style="display:none">
     <div class="card">
-      <h2>添加 River API Key<span class="hint">在 console.river.ai/keys 创建，形如 rv_…</span></h2>
+      <div class="toolbar">
+        <h2 style="margin:0">账号<span class="hint" id="credCount"></span></h2>
+        <div class="spacer"></div>
+        <button class="primary" id="openAdd">添加账号</button>
+        <button id="refreshBtn">刷新全部模型</button>
+        <button id="reloadBtn">重新加载</button>
+      </div>
+      <div class="grid" id="creds"><div class="empty">加载中…</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Token 用量<span class="hint">来自上游响应中的 usage 字段</span></h2>
+      <div class="totals" id="totals"></div>
+    </div>
+  </section>
+
+  <!-- 添加账号：平时收起，点按钮才展开，避免页面上一开始就摆着一个密码框 -->
+  <div class="modal" id="addModal" style="display:none">
+    <div class="modalbox">
+      <div class="toolbar">
+        <h2 style="margin:0">添加 River API Key</h2>
+        <div class="spacer"></div>
+        <button class="sm" id="closeAdd">关闭</button>
+      </div>
+      <p class="hint" style="margin:-4px 0 14px">
+        Key 在 <a href="https://console.river.ai/keys" target="_blank" rel="noopener">console.river.ai/keys</a> 创建，形如 <code>rv_…</code>。添加前会向上游验证可访问的模型。
+      </p>
       <div class="row">
         <div style="flex:2">
           <label for="key">API Key</label>
@@ -282,28 +378,11 @@ tr.lvl-error td { color: var(--err); }
       </div>
       <div class="actions">
         <button class="primary" id="addBtn">验证并添加</button>
-        <div class="sub" style="color:var(--muted);font-size:12px">
-          添加前会向上游验证该 key 可访问的模型
-        </div>
+        <button id="cancelAdd">取消</button>
       </div>
       <div class="msg" id="addMsg"></div>
     </div>
-
-    <div class="card">
-      <div class="toolbar">
-        <h2 style="margin:0">账号<span class="hint" id="credCount"></span></h2>
-        <div class="spacer"></div>
-        <button id="refreshBtn">刷新全部模型</button>
-        <button id="reloadBtn">重新加载</button>
-      </div>
-      <div class="grid" id="creds"><div class="empty">加载中…</div></div>
-    </div>
-
-    <div class="card">
-      <h2>Token 用量<span class="hint">来自上游响应中的 usage 字段</span></h2>
-      <div class="totals" id="totals"></div>
-    </div>
-  </section>
+  </div>
 
   <!-- 路由策略 -->
   <section id="tab-routing" style="display:none">
@@ -382,10 +461,13 @@ tr.lvl-error td { color: var(--err); }
     </div>
 
     <div class="card">
-      <h2>内置模型目录<span class="hint" id="modelCount"></span></h2>
+      <h2>内置模型目录<span class="hint" id="modelCount"></span>
+        <span class="hint">价格单位 USD / 百万 tokens，与 River 公布价一致</span></h2>
       <div style="overflow:auto">
         <table id="models">
-          <thead><tr><th>对外模型名</th><th>上游模型</th><th>上下文</th><th>最大输出</th><th>可用账号</th></tr></thead>
+          <thead><tr><th>对外模型名</th><th>上游模型</th><th>上下文</th><th>最大输出</th>
+            <th style="text-align:right">输入</th><th style="text-align:right">缓存</th>
+            <th style="text-align:right">输出</th><th style="text-align:right">可用账号</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -608,25 +690,26 @@ async function loadLogs() {
   if (auth && auth !== "all") params.set("auth_id", auth);
   if (model && model !== "all") params.set("model", model);
   if (q) params.set("q", q);
+  const kind = $("fKind").value;
+  if (kind && kind !== "all") params.set("kind", kind);
+  const since = rangeSince();
+  if (since) params.set("since", since);
 
   try {
     const data = await call("/logs?" + params.toString());
     const logs = data.logs || [];
     logTotal = data.total || 0;
-    const tbody = $("logsTable").querySelector("tbody");
+    renderLogSummary(data.summary || {});
+
+    const box = $("logRows");
+    const empty = $("logEmpty");
     if (!logs.length) {
-      tbody.innerHTML = '<tr><td colspan="7" class="empty">没有符合条件的日志</td></tr>';
+      box.innerHTML = "";
+      empty.style.display = "";
+      empty.textContent = "这段时间没有符合条件的记录";
     } else {
-      tbody.innerHTML = logs.map((l) => `
-        <tr class="lvl-${escapeHTML(l.level || "")}">
-          <td>${escapeHTML(fmtTime(l.time))}</td>
-          <td>${escapeHTML((l.level || "").toUpperCase())}</td>
-          <td>${l.status ? escapeHTML(l.status) : "—"}</td>
-          <td>${l.ms ? escapeHTML(l.ms) + "ms" : "—"}</td>
-          <td><code>${escapeHTML(l.model || "—")}</code></td>
-          <td><code>${escapeHTML((l.auth_id || "—").slice(0, 10))}</code></td>
-          <td>${escapeHTML(l.detail || "")}</td>
-        </tr>`).join("");
+      empty.style.display = "none";
+      box.innerHTML = logs.map(renderLogRow).join("");
     }
     const from = logTotal ? logOffset + 1 : 0;
     const to = Math.min(logOffset + LOG_LIMIT, logTotal);
@@ -640,18 +723,141 @@ async function loadLogs() {
     fillSelect($("fAuth"), Object.keys(facets.auth_ids || {}).sort(), facets.auth_ids, "全部");
     fillSelect($("fModel"), Object.keys(facets.models || {}).sort(), facets.models, "全部");
   } catch (e) {
-    $("logsTable").querySelector("tbody").innerHTML =
-      `<tr><td colspan="7" class="empty">${escapeHTML(e.message)}</td></tr>`;
+    $("logRows").innerHTML = "";
+    const empty = $("logEmpty");
+    empty.style.display = "";
+    empty.textContent = e.message;
   }
 }
 
-for (const id of ["fLevel", "fAuth", "fModel"]) {
+/* The four header figures. Cache hit rate is cached/prompt, which is what the
+   upstream reports; it is not a guess about what was reused. */
+function renderLogSummary(s) {
+  const pct = s.cache_hit_rate ? s.cache_hit_rate.toFixed(1) + "%" : "—";
+  const speed = s.avg_tokens_per_second ? s.avg_tokens_per_second.toFixed(1) + " t/s" : "—";
+  const first = s.avg_first_byte_ms ? (s.avg_first_byte_ms / 1000).toFixed(2) + "s" : "—";
+  const cost = s.cost_usd ? "$" + s.cost_usd.toFixed(6) : "$0";
+  const fail = s.failures ? ` · 失败 ${s.failures}` : "";
+  const tokens = (s.total_tokens || 0).toLocaleString();
+  $("logStats").innerHTML = `
+    <div class="s"><div class="k">总请求数</div><div class="v">${(s.requests || 0).toLocaleString()}</div>
+      <div class="u">${fail ? escapeHTML(fail.replace(" · ", "")) : "无失败"}</div></div>
+    <div class="s"><div class="k">总 Tokens</div><div class="v">${tokens}</div>
+      <div class="u">输入 ${(s.prompt_tokens || 0).toLocaleString()} · 输出 ${(s.completion_tokens || 0).toLocaleString()} · 缓存 ${(s.cached_tokens || 0).toLocaleString()}</div></div>
+    <div class="s"><div class="k">缓存命中率</div><div class="v">${pct}</div>
+      <div class="u">平均首字 ${first} · 平均耗时 ${s.avg_ms ? (s.avg_ms / 1000).toFixed(2) + "s" : "—"}</div></div>
+    <div class="s"><div class="k">平均生成速度</div><div class="v">${speed}</div>
+      <div class="u">累计成本 ${cost}</div></div>`;
+}
+
+/* One row. Requests and events render differently because they answer
+   different questions: a request has latency and tokens, an event has only
+   what happened. */
+function renderLogRow(l) {
+  const isRequest = l.kind === "request";
+  const level = (l.level || "info").toLowerCase();
+  const cls = level === "error" ? "err" : level === "warn" ? "warn" : "";
+  const when = `<div class="when">${escapeHTML(fmtTime(l.time))}</div>`;
+
+  const status = l.status
+    ? `<span class="badge ${l.status >= 400 ? "err" : "on"}">HTTP ${escapeHTML(l.status)}</span>`
+    : "";
+
+  if (!isRequest) {
+    return `<div class="lrow ${cls}">
+      ${when}
+      <div class="main">
+        <div>${escapeHTML(l.detail || "")}</div>
+        <div class="sub2"><span class="badge k">事件</span>
+          <span>${escapeHTML((level || "").toUpperCase())}</span>
+          ${l.model ? `<code>${escapeHTML(l.model)}</code>` : ""}
+          ${l.auth_id ? `<span>${escapeHTML(l.auth_id.slice(0, 10))}</span>` : ""}</div>
+      </div>
+      <div class="nums"></div>
+    </div>`;
+  }
+
+  const nums = [];
+  nums.push(`<div class="n"><div class="k">首字</div>
+    <div class="v">${l.first_byte_ms ? (l.first_byte_ms / 1000).toFixed(1) + "s" : "—"}</div></div>`);
+  nums.push(`<div class="n"><div class="k">耗时</div>
+    <div class="v">${l.ms ? (l.ms / 1000).toFixed(1) + "s" : "—"}</div></div>`);
+  if (l.prompt_tokens) {
+    nums.push(`<div class="n"><div class="k">用量</div>
+      <div class="v">${l.prompt_tokens.toLocaleString()} / ${(l.completion_tokens || 0).toLocaleString()}</div></div>`);
+  }
+  if (l.cached_tokens) {
+    const hit = l.prompt_tokens ? ((l.cached_tokens / l.prompt_tokens) * 100).toFixed(1) : "0";
+    nums.push(`<div class="n"><div class="k">缓存</div>
+      <div class="v good">${l.cached_tokens.toLocaleString()} (${hit}%)</div></div>`);
+  }
+  if (l.tokens_per_second) {
+    nums.push(`<div class="n"><div class="k">速度</div>
+      <div class="v">${l.tokens_per_second.toFixed(0)} t/s</div></div>`);
+  }
+  if (l.cost_usd) {
+    nums.push(`<div class="n"><div class="k">成本</div>
+      <div class="v">$${l.cost_usd.toFixed(6)}</div></div>`);
+  }
+
+  const meta = [];
+  if (l.stream) meta.push('<span class="badge k">流式</span>');
+  if (l.upstream) meta.push(`<span>上游 ${escapeHTML(l.upstream)}</span>`);
+  if (l.auth_id) meta.push(`<span>${escapeHTML(shortAuth(l.auth_id))}</span>`);
+
+  return `<div class="lrow ${cls}">
+    ${when}
+    <div class="main">
+      <div class="model">${escapeHTML(l.model || "—")} ${status}</div>
+      <div class="sub2">${meta.join("")}</div>
+      ${l.detail && l.detail !== "no usage reported"
+        ? `<div class="detail">${escapeHTML(l.detail)}</div>` : ""}
+    </div>
+    <div class="nums">${nums.join("")}</div>
+  </div>`;
+}
+
+/* shortAuth trims the credential hash the way the row header shows it. */
+function shortAuth(id) {
+  return String(id).length > 12 ? String(id).slice(0, 10) + "…" : String(id);
+}
+
+/* ---------- time ranges ---------- */
+
+let logRange = "all";
+
+/* rangeSince turns the selected window into an RFC3339 cutoff. Relative
+   windows are computed here, in the browser, so "today" means the operator's
+   today rather than the server's UTC day. */
+function rangeSince() {
+  const now = new Date();
+  if (logRange === "today") {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return start.toISOString();
+  }
+  const spans = { "24h": 24, "7d": 24 * 7, "30d": 24 * 30 };
+  if (spans[logRange]) {
+    return new Date(now.getTime() - spans[logRange] * 3600 * 1000).toISOString();
+  }
+  return "";
+}
+
+for (const id of ["fLevel", "fAuth", "fModel", "fKind"]) {
   $(id).addEventListener("change", () => { logOffset = 0; loadLogs(); });
 }
 $("fQuery").addEventListener("input", () => {
   clearTimeout(window.__logTimer);
   window.__logTimer = setTimeout(() => { logOffset = 0; loadLogs(); }, 250);
 });
+$("rangeBar").addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button[data-range]");
+  if (!btn) return;
+  logRange = btn.dataset.range;
+  for (const b of $("rangeBar").querySelectorAll(".seg")) b.classList.toggle("on", b === btn);
+  logOffset = 0;
+  loadLogs();
+});
+$("reloadLogs").addEventListener("click", () => loadLogs());
 $("logPrev").addEventListener("click", () => {
   logOffset = Math.max(0, logOffset - LOG_LIMIT); loadLogs();
 });
@@ -850,11 +1056,33 @@ $("addBtn").addEventListener("click", async () => {
     $("key").value = "";
     $("label").value = "";
     await Promise.all([loadCreds(), loadModels(), loadStatus()]);
+    setTimeout(() => { if (!$("addMsg").classList.contains("err")) closeAddModal(); }, 1200);
   } catch (e) {
     showMsg($("addMsg"), e.message, "err");
   } finally {
     btn.disabled = false;
   }
+});
+
+/* ---------- add-account modal ---------- */
+
+function openAddModal() {
+  $("addModal").style.display = "grid";
+  $("addMsg").className = "msg";
+  $("addMsg").textContent = "";
+  setTimeout(() => $("key").focus(), 30);
+}
+function closeAddModal() {
+  $("addModal").style.display = "none";
+}
+$("openAdd").addEventListener("click", openAddModal);
+$("closeAdd").addEventListener("click", closeAddModal);
+$("cancelAdd").addEventListener("click", closeAddModal);
+$("addModal").addEventListener("click", (ev) => {
+  if (ev.target === $("addModal")) closeAddModal();
+});
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && $("addModal").style.display !== "none") closeAddModal();
 });
 
 $("refreshBtn").addEventListener("click", async () => {
@@ -1047,21 +1275,37 @@ async function loadModels() {
     $("modelCount").textContent = list.length ? `（${list.length}）` : "";
     const tbody = $("models").querySelector("tbody");
     if (!list.length) {
-      tbody.innerHTML = '<tr><td colspan="5" class="empty">还没有可用模型</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="empty">还没有可用模型</td></tr>';
       return;
     }
-    tbody.innerHTML = list.map((m) => `
+    tbody.innerHTML = list.map((m) => {
+      const p = m.pricing || {};
+      const rate = (v) => (v ? "$" + money(v) : "—");
+      return `
       <tr>
         <td><code>${escapeHTML(m.id)}</code></td>
         <td><code>${escapeHTML(m.upstream)}</code></td>
         <td>${m.context_length ? fmtNum(m.context_length) : "—"}</td>
         <td>${m.max_output_tokens ? fmtNum(m.max_output_tokens) : "—"}</td>
-        <td>${fmtNum((m.credentials || []).length)}</td>
-      </tr>`).join("");
+        <td style="text-align:right">${rate(p.input_usd_per_million)}</td>
+        <td style="text-align:right">${rate(p.cached_usd_per_million)}</td>
+        <td style="text-align:right">${rate(p.output_usd_per_million)}</td>
+        <td style="text-align:right">${fmtNum((m.credentials || []).length)}</td>
+      </tr>`;
+    }).join("");
   } catch (e) {
     $("models").querySelector("tbody").innerHTML =
-      `<tr><td colspan="5" class="empty">${escapeHTML(e.message)}</td></tr>`;
+      `<tr><td colspan="8" class="empty">${escapeHTML(e.message)}</td></tr>`;
   }
+}
+
+/* money keeps small rates readable: 0.0024 must not render as $0.00. */
+function money(v) {
+  const n = Number(v) || 0;
+  if (n === 0) return "0";
+  if (n < 0.01) return n.toFixed(4);
+  if (n < 1) return n.toFixed(3);
+  return n.toFixed(2);
 }
 
 /* ---------- lock ---------- */
@@ -1095,10 +1339,8 @@ async function refreshAll() {
   await (LOADERS[activeTab] || (() => {}))();
 }
 
-setInterval(() => {
-  if (activeTab === "logs" && $("autoRefresh").checked) loadLogs();
-}, 10000);
-
+// The log page never refreshes itself: a row that moves while you are reading
+// it is worse than a row that is a few seconds stale. Use the 刷新 button.
 refreshAll();
 </script>
 </body>

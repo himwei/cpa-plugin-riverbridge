@@ -56,6 +56,30 @@ func lookupPrice(upstream string) (price, bool) {
 	return price{}, false
 }
 
+// pricingView is the money and capability block the console shows next to a
+// model. It exists so the stored rates are visible instead of only being used
+// deep inside the cost calculation: an operator comparing River against another
+// provider needs the numbers, not just the final bill.
+type pricingView struct {
+	InputUSDPerMillion  float64 `json:"input_usd_per_million"`
+	CachedUSDPerMillion float64 `json:"cached_usd_per_million"`
+	OutputUSDPerMillion float64 `json:"output_usd_per_million"`
+}
+
+// viewOf renders the prices for one upstream model. A model River publishes no
+// rate for reports zeroes rather than a guess.
+func viewOf(upstream string) pricingView {
+	p, ok := lookupPrice(upstream)
+	if !ok {
+		return pricingView{}
+	}
+	return pricingView{
+		InputUSDPerMillion:  p.Input,
+		CachedUSDPerMillion: p.Cached,
+		OutputUSDPerMillion: p.Output,
+	}
+}
+
 // priceUsage prices one response for a known upstream model.
 func priceUsage(upstream string, u *Usage) float64 {
 	if u == nil {

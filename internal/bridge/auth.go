@@ -321,6 +321,7 @@ func (s *Service) log(level, model, authID string, status int, ms int64, detail 
 		return
 	}
 	logs.add(logEntry{
+		Kind:   KindEvent,
 		Level:  level,
 		Model:  model,
 		AuthID: authID,
@@ -328,6 +329,22 @@ func (s *Service) log(level, model, authID string, status int, ms int64, detail 
 		Millis: ms,
 		Detail: detail,
 	})
+}
+
+// logRequest records one upstream call with the latency and token columns the
+// log table shows. Everything here is measured or reported, never estimated.
+func (s *Service) logRequest(e logEntry) {
+	e.Kind = KindRequest
+	if e.Level == "" {
+		e.Level = "info"
+	}
+	s.mu.RLock()
+	logs := s.logs
+	s.mu.RUnlock()
+	if logs == nil {
+		return
+	}
+	logs.add(e)
 }
 
 // debugf mirrors one line to both the plugin log ring and CPA's own log, which

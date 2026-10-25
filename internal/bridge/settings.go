@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -217,11 +218,30 @@ func (s *Service) managementLogsQuery(method string, query map[string][]string) 
 	model := strings.ToLower(get("model"))
 	authID := strings.ToLower(get("auth_id"))
 	search := strings.ToLower(get("q"))
+	kind := strings.ToLower(get("kind"))
+	// since is an RFC3339 cutoff. Relative windows are resolved in the browser
+	// so the browser's clock decides what "today" means, not the server's zone.
+	since := get("since")
+	var sinceTime time.Time
+	if since != "" && since != "all" {
+		if parsed, err := time.Parse(time.RFC3339, since); err == nil {
+			sinceTime = parsed
+		}
+	}
 
 	filtered := make([]logEntry, 0, len(entries))
 	for _, e := range entries {
 		if level != "" && level != "all" && strings.ToLower(e.Level) != level {
 			continue
+		}
+		if kind != "" && kind != "all" && strings.ToLower(e.Kind) != kind {
+			continue
+		}
+		if !sinceTime.IsZero() {
+			ts, err := time.Parse(time.RFC3339, e.Time)
+			if err != nil || ts.Before(sinceTime) {
+				continue
+			}
 		}
 		if model != "" && model != "all" && strings.ToLower(e.Model) != model {
 			continue
@@ -258,12 +278,18 @@ func (s *Service) managementLogsQuery(method string, query map[string][]string) 
 		end = total
 	}
 
-	// Facets drive the filter dropdowns, so they must reflect every entry and
-	// not just the current page.
+	// Facets drive the filter dropdowns, so they must reflect every entry in
+	// the selected time window and not just the current page.
 	levels := map[string]int{}
 	models := map[string]int{}
 	auths := map[string]int{}
 	for _, e := range entries {
+		if !sinceTime.IsZero() {
+			ts, err := time.Parse(time.RFC3339, e.Time)
+			if err != nil || ts.Before(sinceTime) {
+				continue
+			}
+		}
 		if e.Level != "" {
 			levels[e.Level]++
 		}
@@ -274,6 +300,7 @@ func (s *Service) managementLogsQuery(method string, query map[string][]string) 
 			auths[e.AuthID]++
 		}
 	}
+
 	return managementJSON(http.StatusOK, map[string]any{
 		"logs":   filtered[offset:end],
 		"total":  total,
@@ -282,8 +309,74 @@ func (s *Service) managementLogsQuery(method string, query map[string][]string) 
 		"facets": map[string]any{
 			"levels": levels, "models": models, "auth_ids": auths,
 		},
+		"summary":   summariseLogs(filtered),
 		"retention": s.config().LogRetention,
 	})
+}
+
+// logSummary is the header row of numbers above the log table. It describes
+// the whole filtered set, not the visible page, so it stays stable while
+// paging and answers "how did this slice behave".
+type logSummary struct {
+	Requests         int     `json:"requests"`
+	Failures         int     `json:"failures"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CachedTokens     int64   `json:"cached_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	TotalTokens      int64   `json:"total_tokens"`
+	CacheHitRate     float64 `json:"cache_hit_rate"`
+	AvgTokensPerSec  float64 `json:"avg_tokens_per_second"`
+	AvgFirstByteMs   int64   `json:"avg_first_byte_ms"`
+	AvgMillis        int64   `json:"avg_ms"`
+	CostUSD          float64 `json:"cost_usd"`
+}
+
+// summariseLogs aggregates the entries the request columns apply to. Only
+// request rows take part: a settings change has no tokens and no latency, and
+// folding it in would drag the averages toward zero.
+func summariseLogs(entries []logEntry) logSummary {
+	var out logSummary
+	var withSpeed, withFirstByte, timed int
+	for _, e := range entries {
+		if e.Kind != KindRequest {
+			continue
+		}
+		out.Requests++
+		if e.Status >= 400 || e.Level == "error" {
+			out.Failures++
+		}
+		out.PromptTokens += int64(e.PromptTokens)
+		out.CachedTokens += int64(e.CachedTokens)
+		out.CompletionTokens += int64(e.CompletionTokens)
+		out.TotalTokens += int64(e.TotalTokens)
+		out.CostUSD += e.CostUSD
+		if e.Millis > 0 {
+			out.AvgMillis += e.Millis
+			timed++
+		}
+		if e.FirstByteMs > 0 {
+			out.AvgFirstByteMs += e.FirstByteMs
+			withFirstByte++
+		}
+		if e.TokensPerSecond > 0 {
+			out.AvgTokensPerSec += e.TokensPerSecond
+			withSpeed++
+		}
+	}
+	if out.PromptTokens > 0 {
+		out.CacheHitRate = math.Round(float64(out.CachedTokens)/float64(out.PromptTokens)*1000) / 10
+	}
+	if timed > 0 {
+		out.AvgMillis /= int64(timed)
+	}
+	if withFirstByte > 0 {
+		out.AvgFirstByteMs /= int64(withFirstByte)
+	}
+	if withSpeed > 0 {
+		out.AvgTokensPerSec = math.Round(out.AvgTokensPerSec/float64(withSpeed)*10) / 10
+	}
+	out.CostUSD = math.Round(out.CostUSD*1e6) / 1e6
+	return out
 }
 
 // atoiDefault parses a query value, falling back when it is absent or junk.

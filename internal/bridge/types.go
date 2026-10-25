@@ -19,7 +19,7 @@ const (
 	PluginID   = "riverbridge"
 	Provider   = "river"
 	Name       = "RiverBridge"
-	Version    = "0.2.0"
+	Version    = "0.3.0"
 	Repository = "https://github.com/himwei/riverbridge"
 
 	// ModelPrefix separates River models from every other provider's models in

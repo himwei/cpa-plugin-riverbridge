@@ -421,11 +421,12 @@ func (s *Service) managementModels() (any, error) {
 	s.mu.RUnlock()
 
 	type modelView struct {
-		ID              string   `json:"id"`
-		Upstream        string   `json:"upstream"`
-		ContextLength   int      `json:"context_length"`
-		MaxOutputTokens int      `json:"max_output_tokens"`
-		Credentials     []string `json:"credentials"`
+		ID              string      `json:"id"`
+		Upstream        string      `json:"upstream"`
+		ContextLength   int         `json:"context_length"`
+		MaxOutputTokens int         `json:"max_output_tokens"`
+		Credentials     []string    `json:"credentials"`
+		Pricing         pricingView `json:"pricing"`
 	}
 	index := map[string]*modelView{}
 	for _, c := range creds {
@@ -439,6 +440,7 @@ func (s *Service) managementModels() (any, error) {
 				view = &modelView{
 					ID: m.ID, Upstream: m.Upstream,
 					ContextLength: m.ContextLength, MaxOutputTokens: m.MaxOutputTokens,
+					Pricing: viewOf(m.Upstream),
 				}
 				index[m.ID] = view
 			}

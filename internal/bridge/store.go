@@ -8,16 +8,41 @@ import (
 
 const settingsFile = "settings.json"
 
-// logEntry is one diagnostic line shown in the plugin console.
+// Log entry kinds. A "request" entry is one upstream call and carries the
+// latency and token columns the log table renders; an "event" entry is a
+// diagnostic line (key added, settings saved) with no upstream behind it.
+const (
+	KindRequest = "request"
+	KindEvent   = "event"
+)
+
+// logEntry is one line shown in the plugin console.
+//
+// The request columns mirror what the host and upstream actually reported:
+// FirstByteMs is measured here because neither River nor CPA exposes a
+// time-to-first-token for a call this plugin proxied, and TokensPerSecond is
+// derived from it so the table can show generation speed rather than total
+// throughput.
 type logEntry struct {
-	Time   string `json:"time"`
-	Level  string `json:"level"`
-	Model  string `json:"model,omitempty"`
-	AuthID string `json:"auth_id,omitempty"`
-	Method string `json:"method,omitempty"`
-	Status int    `json:"status,omitempty"`
-	Millis int64  `json:"ms,omitempty"`
-	Detail string `json:"detail,omitempty"`
+	Time     string `json:"time"`
+	Level    string `json:"level"`
+	Kind     string `json:"kind,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Upstream string `json:"upstream,omitempty"`
+	AuthID   string `json:"auth_id,omitempty"`
+	Method   string `json:"method,omitempty"`
+	Status   int    `json:"status,omitempty"`
+	Millis   int64  `json:"ms,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+
+	FirstByteMs      int64   `json:"first_byte_ms,omitempty"`
+	PromptTokens     int     `json:"prompt_tokens,omitempty"`
+	CachedTokens     int     `json:"cached_tokens,omitempty"`
+	CompletionTokens int     `json:"completion_tokens,omitempty"`
+	TotalTokens      int     `json:"total_tokens,omitempty"`
+	TokensPerSecond  float64 `json:"tokens_per_second,omitempty"`
+	CostUSD          float64 `json:"cost_usd,omitempty"`
+	Stream           bool    `json:"stream,omitempty"`
 }
 
 // logRing is a fixed-size ring buffer of recent diagnostics.
