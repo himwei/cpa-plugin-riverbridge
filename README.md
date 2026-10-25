@@ -77,8 +77,28 @@ The console has four tabs:
 - **日志 (logs)** — every request, newest first, filterable by level, account,
   model and free text. Paged, with NDJSON export.
 - **账号配置 (accounts)** — one card per key: enable/disable it, rename it, set a
-  priority, and switch individual models off. A model you switch off stops
-  appearing in `/v1/models` for that key instead of failing at request time.
+  priority or a spending ceiling, and switch individual models off. A model you
+  switch off stops appearing in `/v1/models` for that key instead of failing at
+  request time.
+
+### Spending ceilings
+
+River has no balance API — every plausible path (`/v1/credits`, `/v1/balance`,
+`/v1/usage`, and ones that cannot exist) answers `200` with an empty body — so
+RiverBridge cannot ask how much credit a key has left. Instead each key can
+carry a ceiling in US dollars, and the plugin accumulates spend from the same
+per-million prices it uses for the cost column. Set it to `0` for no ceiling.
+
+The running total lives in `plugins/riverbridge-data/spend.json`, **not** in the
+auth file. CPA re-runs `auth.parse` for a credential on every request and
+rebuilds the record from that file, so a counter stored there is reset within a
+second of being charged.
+
+When a key reaches its ceiling it is taken out of rotation and marked in the
+console. It is not answered with `403`: CPA remembers a 403 against that auth
+and keeps skipping it afterwards, so the key would stay dark even after a
+top-up. Raising the ceiling (or pressing 重置已用 after paying) returns it to
+service within a request, with no restart.
 - **路由策略 (routing)** — fill-first (always use the highest-priority enabled
   key) or round-robin (spread across keys), plus retry-on-failure.
 - **设置概览 (settings)** — runtime overview, log retention, request timeout,
