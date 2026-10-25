@@ -2,8 +2,10 @@ package bridge
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -309,9 +311,69 @@ func (s *Service) managementLogsQuery(method string, query map[string][]string) 
 		"facets": map[string]any{
 			"levels": levels, "models": models, "auth_ids": auths,
 		},
-		"summary":   summariseLogs(filtered),
+		"summary": summariseLogs(filtered),
+		// durable covers the same window from the persisted minute buckets, so a
+		// window longer than the retention still reports real totals instead of
+		// whatever happens to still be in memory.
+		"durable":   s.durableTotals(sinceTime, time.Time{}),
 		"retention": s.config().LogRetention,
+		"storage":   s.storageState(),
 	})
+}
+
+// durableTotals renders the persisted statistics for [start, end).
+func (s *Service) durableTotals(start, end time.Time) map[string]any {
+	s.mu.RLock()
+	stats := s.stats
+	s.mu.RUnlock()
+	if stats == nil {
+		return map[string]any{"available": false}
+	}
+	total, since, ok := stats.rangeTotals(start, end)
+	out := map[string]any{
+		"available":         ok,
+		"requests":          total.Requests,
+		"failures":          total.Failures,
+		"prompt_tokens":     total.PromptTokens,
+		"cached_tokens":     total.CachedTokens,
+		"completion_tokens": total.CompletionTokens,
+		"total_tokens":      total.PromptTokens + total.CompletionTokens,
+		"cost_usd":          float64(total.CostMicroUSD) / 1e6,
+		"resolution":        "minute",
+		"collecting_since":  since,
+		"persistence_error": stats.lastError(),
+	}
+	if total.PromptTokens > 0 {
+		out["cache_hit_rate"] = math.Round(float64(total.CachedTokens)/float64(total.PromptTokens)*1000) / 10
+	}
+	if total.RateDurationMS > 0 {
+		out["avg_tokens_per_second"] = math.Round(float64(total.RateTokens)*1000/float64(total.RateDurationMS)*10) / 10
+	}
+	if total.FirstByteSamples > 0 {
+		out["avg_first_byte_ms"] = total.FirstByteMS / total.FirstByteSamples
+	}
+	if total.Requests > 0 {
+		out["avg_ms"] = total.DurationMS / total.Requests
+	}
+	return out
+}
+
+// storageState reports whether the log and the counters are reaching disk, so
+// a read-only data directory shows up in the console instead of being silent.
+func (s *Service) storageState() map[string]any {
+	cfg := s.config()
+	s.mu.RLock()
+	logs := s.logs
+	stats := s.stats
+	s.mu.RUnlock()
+	out := map[string]any{"dir": cfg.DataDir}
+	if logs != nil {
+		out["log_error"] = logs.lastError()
+	}
+	if stats != nil {
+		out["stats_error"] = stats.lastError()
+	}
+	return out
 }
 
 // logSummary is the header row of numbers above the log table. It describes
@@ -432,3 +494,79 @@ func (s *Service) managementExportLogs() (any, error) {
 
 // settingsPath is where writeSettingsLocked puts settings.json.
 func settingsPath(cfg Config) string { return filepath.Join(cfg.DataDir, settingsFile) }
+
+// managementStatistics serves the durable counters. Unlike /logs this reads the
+// persisted minute buckets, so a window longer than the log retention still
+// reports real totals: the log is a rolling window, the counters are not.
+func (s *Service) managementStatistics(query url.Values) (any, error) {
+	get := func(key string) string {
+		if v, ok := query[key]; ok && len(v) > 0 {
+			return strings.TrimSpace(v[0])
+		}
+		return ""
+	}
+	parse := func(key string) (time.Time, error) {
+		raw := get(key)
+		if raw == "" {
+			return time.Time{}, nil
+		}
+		ts, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("%s must be an RFC3339 timestamp", key)
+		}
+		return ts.UTC(), nil
+	}
+	start, err := parse("start")
+	if err != nil {
+		return managementJSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+	end, err := parse("end")
+	if err != nil {
+		return managementJSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+	if !start.IsZero() && !end.IsZero() && !end.After(start) {
+		return managementJSON(http.StatusBadRequest, map[string]string{"error": "end must be after start"})
+	}
+
+	body := s.durableTotals(start, end)
+	// A zero window means "everything ever counted", which is what the console
+	// shows on the 全部 tab.
+	s.mu.RLock()
+	stats := s.stats
+	s.mu.RUnlock()
+	if stats != nil {
+		days, since, ok := stats.dayIndex()
+		body["days"] = days
+		body["available"] = ok
+		if start.IsZero() && end.IsZero() {
+			body["collecting_since"] = since
+		}
+	}
+	return managementJSON(http.StatusOK, body)
+}
+
+// managementResetStatistics starts a new counting generation. The old files
+// stay on disk as a rollback copy; no logs or credentials are touched.
+func (s *Service) managementResetStatistics(body []byte) (any, error) {
+	var req struct {
+		Confirm bool `json:"confirm"`
+	}
+	if len(body) > 0 {
+		_ = json.Unmarshal(body, &req)
+	}
+	if !req.Confirm {
+		return managementJSON(http.StatusBadRequest, map[string]string{"error": "请确认清空统计数据"})
+	}
+	s.mu.RLock()
+	stats := s.stats
+	s.mu.RUnlock()
+	if stats == nil {
+		return managementJSON(http.StatusInternalServerError, map[string]string{"error": "statistics unavailable"})
+	}
+	since, err := stats.reset()
+	if err != nil {
+		return managementJSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	s.log("info", "", "", http.StatusOK, 0, "statistics reset")
+	return managementJSON(http.StatusOK, map[string]any{"ok": true, "since": since})
+}

@@ -333,14 +333,25 @@ func (s *Service) log(level, model, authID string, status int, ms int64, detail 
 
 // logRequest records one upstream call with the latency and token columns the
 // log table shows. Everything here is measured or reported, never estimated.
+//
+// The entry is folded into the statistics buckets as well as the log ring: the
+// ring is a rolling window that forgets old lines, while the totals have to
+// survive both truncation and a restart.
 func (s *Service) logRequest(e logEntry) {
 	e.Kind = KindRequest
 	if e.Level == "" {
 		e.Level = "info"
 	}
+	if e.Time == "" {
+		e.Time = time.Now().UTC().Format(time.RFC3339Nano)
+	}
 	s.mu.RLock()
 	logs := s.logs
+	stats := s.stats
 	s.mu.RUnlock()
+	if stats != nil {
+		stats.record(e)
+	}
 	if logs == nil {
 		return
 	}

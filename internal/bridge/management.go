@@ -17,11 +17,11 @@ const apiBase = "/v0/management/" + PluginID
 // registerManagement declares the console route plus the JSON API.
 func (s *Service) registerManagement(raw json.RawMessage) (any, error) {
 	routes := []map[string]string{}
-	for _, p := range []string{"status", "credentials", "models", "logs", "logs/export", "usage", "settings"} {
+	for _, p := range []string{"status", "credentials", "models", "logs", "logs/export", "usage", "settings", "statistics"} {
 		routes = append(routes, map[string]string{"Method": "GET", "Path": apiBase + "/" + p})
 	}
 	for _, p := range []string{"credentials", "credentials/test", "credentials/model",
-		"models/refresh", "usage/reset", "logs/clear", "settings"} {
+		"models/refresh", "usage/reset", "logs/clear", "settings", "statistics/reset"} {
 		routes = append(routes, map[string]string{"Method": "POST", "Path": apiBase + "/" + p})
 	}
 	for _, p := range []string{"credentials"} {
@@ -100,6 +100,10 @@ func (s *Service) handleManagement(raw json.RawMessage) (any, error) {
 		return s.managementUsage()
 	case "POST /usage/reset":
 		return s.managementResetUsage(r.Body)
+	case "GET /statistics":
+		return s.managementStatistics(r.Query)
+	case "POST /statistics/reset":
+		return s.managementResetStatistics(r.Body)
 	case "GET /settings":
 		return s.managementSettings()
 	case "POST /settings":

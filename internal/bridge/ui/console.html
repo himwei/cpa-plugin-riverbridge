@@ -196,6 +196,15 @@ tr.lvl-error td { color: var(--err); }
 .pager { display: flex; gap: 8px; align-items: center; margin-top: 12px; font-size: 12px; color: var(--muted); }
 .pager .spacer { flex: 1; }
 
+/* Durable totals: the counters survive restarts and outlive the log window,
+   so they are shown above the row list rather than inside it. */
+.durablebar {
+  display: flex; flex-wrap: wrap; gap: 6px 18px;
+  margin: -4px 0 14px; font-size: 12px; color: var(--muted);
+}
+.durablebar b { color: var(--fg); font-weight: 600; }
+.durablebar .warn { color: var(--warn); }
+
 /* Modal for the add-account form. Kept as a dialog so the key field is not
    sitting on the page in plain sight the moment the tab opens. */
 .modal {
@@ -288,6 +297,7 @@ tr.lvl-error td { color: var(--err); }
   <!-- 日志 -->
   <section id="tab-logs">
     <div class="statrow" id="logStats"></div>
+    <div class="durablebar" id="logDurable"></div>
 
     <div class="card">
       <div class="toolbar">
@@ -711,6 +721,8 @@ async function loadLogs() {
       empty.style.display = "none";
       box.innerHTML = logs.map(renderLogRow).join("");
     }
+    renderDurable(data.durable || {}, data.storage || {}, data.retention);
+
     const from = logTotal ? logOffset + 1 : 0;
     const to = Math.min(logOffset + LOG_LIMIT, logTotal);
     $("logRange").textContent = `第 ${from}–${to} 条 / 共 ${logTotal} 条`;
@@ -732,6 +744,42 @@ async function loadLogs() {
 
 /* The four header figures. Cache hit rate is cached/prompt, which is what the
    upstream reports; it is not a guess about what was reused. */
+/* renderDurable shows the counters that live on disk. The row list above is a
+   rolling window that forgets; these numbers do not, so when the window covers
+   less than the selected range they will disagree — and the durable ones are
+   the truthful total. */
+function renderDurable(d, storage, retention) {
+  const bar = $("logDurable");
+  if (!d || d.available === false) {
+    bar.innerHTML = `<span>持久统计尚未就绪</span>`;
+    return;
+  }
+  const since = d.collecting_since ? new Date(d.collecting_since) : null;
+  const sinceText = since && !isNaN(since)
+    ? `${since.toLocaleDateString()} 起`
+    : "—";
+  const speed = d.avg_tokens_per_second ? d.avg_tokens_per_second.toFixed(1) + " t/s" : "—";
+  const first = d.avg_first_byte_ms ? (d.avg_first_byte_ms / 1000).toFixed(2) + "s" : "—";
+  const cache = d.cache_hit_rate ? d.cache_hit_rate.toFixed(1) + "%" : "—";
+  const cost = d.cost_usd ? "$" + d.cost_usd.toFixed(6) : "$0";
+  const parts = [
+    `累计统计（${escapeHTML(sinceText)}，按分钟归档）`,
+    `<b>${(d.requests || 0).toLocaleString()}</b> 请求`,
+    d.failures ? `<b>${d.failures.toLocaleString()}</b> 失败` : "",
+    `<b>${(d.total_tokens || 0).toLocaleString()}</b> tokens`,
+    `缓存 <b>${cache}</b>`,
+    `平均 <b>${speed}</b>`,
+    `首字 <b>${first}</b>`,
+    `成本 <b>${cost}</b>`,
+  ].filter(Boolean);
+  const warn = [];
+  if (storage && storage.log_error) warn.push("日志写入失败：" + storage.log_error);
+  if (storage && storage.stats_error) warn.push("统计写入失败：" + storage.stats_error);
+  if (d.persistence_error) warn.push("统计写入失败：" + d.persistence_error);
+  bar.innerHTML = parts.map((p) => `<span>${p}</span>`).join("") +
+    warn.map((w) => `<span class="warn">${escapeHTML(w)}</span>`).join("");
+}
+
 function renderLogSummary(s) {
   const pct = s.cache_hit_rate ? s.cache_hit_rate.toFixed(1) + "%" : "—";
   const speed = s.avg_tokens_per_second ? s.avg_tokens_per_second.toFixed(1) + " t/s" : "—";

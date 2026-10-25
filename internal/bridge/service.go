@@ -29,6 +29,9 @@ type Service struct {
 
 	logs  *logRing
 	usage *usageStore
+	// stats counts every finished request into per-day buckets that outlive
+	// the log retention window (see statisticsStore).
+	stats *statisticsStore
 
 	// rr and cooldown drive auth selection in pickAuth.
 	rr       *roundRobin
@@ -37,6 +40,10 @@ type Service struct {
 	// schedPicks counts scheduler.pick calls; see markSchedulerActive.
 	schedPicks     int64
 	schedFirstPick string
+
+	// stopFlush closes the background persistence loop on shutdown.
+	stopFlush chan struct{}
+	flushOnce sync.Once
 }
 
 // NewService builds an unconfigured service. The host calls plugin.register
@@ -48,10 +55,12 @@ func NewService() *Service {
 		files:    map[string]string{},
 		revoked:  map[string]bool{},
 		started:  time.Now(),
-		logs:     newLogRing(defaultConfig().LogRetention),
+		logs:     newLogRing("", defaultConfig().LogRetention),
 		usage:    newUsageStore(),
+		stats:    newStatisticsStore(""),
 		rr:       newRoundRobin(),
 		cooldown: newCooldowns(90 * time.Second),
+		stopFlush: make(chan struct{}),
 	}
 }
 
@@ -77,6 +86,50 @@ func (s *Service) config() Config {
 	s.configMu.RLock()
 	defer s.configMu.RUnlock()
 	return s.cfg
+}
+
+// startFlushLoop persists counters on a timer. Waiting for shutdown alone is
+// not enough: a process that is killed or wedged loses everything since the
+// last clean exit, which is exactly the history someone wants after a crash.
+func (s *Service) startFlushLoop() {
+	s.flushOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(15 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-s.stopFlush:
+					return
+				case <-ticker.C:
+					s.flushCounters()
+				}
+			}
+		}()
+	})
+}
+
+// flushCounters writes the statistics buckets and usage counters. The journal
+// is written inline by logRing.add, so it needs no timer.
+func (s *Service) flushCounters() {
+	cfg := s.config()
+	s.mu.RLock()
+	usage := s.usage
+	stats := s.stats
+	s.mu.RUnlock()
+	if usage != nil {
+		_ = usage.save(cfg.DataDir)
+	}
+	if stats != nil {
+		stats.flush()
+	}
+}
+
+func (s *Service) stopFlushLoop() {
+	select {
+	case <-s.stopFlush:
+	default:
+		close(s.stopFlush)
+	}
 }
 
 // Handle dispatches one RPC method from the host.
@@ -134,6 +187,7 @@ func (s *Service) Handle(method string, raw json.RawMessage) (any, error) {
 		s.mu.Lock()
 		s.stopped = true
 		s.mu.Unlock()
+		s.stopFlushLoop()
 		s.flush()
 		return map[string]any{}, nil
 	}
@@ -174,8 +228,10 @@ func (s *Service) configure(raw json.RawMessage) error {
 	}
 
 	s.cfg = cfg
+	// Restart the on-disk log from the configured directory so a changed
+	// data_dir is honoured; the ring replays the journal into memory here.
 	s.mu.Lock()
-	s.logs.setLimit(cfg.LogRetention)
+	s.logs = newLogRing(cfg.DataDir, cfg.LogRetention)
 	s.mu.Unlock()
 
 	s.mu.RLock()
@@ -184,6 +240,15 @@ func (s *Service) configure(raw json.RawMessage) error {
 	if store != nil {
 		store.load(cfg.DataDir)
 	}
+
+	s.mu.RLock()
+	stats := s.stats
+	s.mu.RUnlock()
+	if stats != nil {
+		stats.dir = cfg.DataDir
+		stats.load()
+	}
+	s.startFlushLoop()
 	return nil
 }
 
@@ -234,6 +299,20 @@ func (s *Service) flush() {
 	s.mu.RUnlock()
 	if usage != nil {
 		_ = usage.save(cfg.DataDir)
+	}
+	s.mu.RLock()
+	logs := s.logs
+	stats := s.stats
+	s.mu.RUnlock()
+	if stats != nil {
+		stats.flush()
+	}
+	// Give the ring one last chance to reach disk; a shutdown that silently
+	// drops the newest lines is the one restart case people notice.
+	if logs != nil {
+		logs.mu.Lock()
+		logs.flushLocked()
+		logs.mu.Unlock()
 	}
 }
 
