@@ -49,7 +49,10 @@ func (s *Service) managementSettings() (any, error) {
 	models := make([]string, 0, 8)
 	seen := map[string]struct{}{}
 	for _, c := range creds {
-		for _, m := range c.AdvertisedModels(cfg) {
+		// The global block list edits this set, so it has to contain every
+		// model any key knows about - including the ones already blocked -
+		// or a blocked model would vanish and could never be re-enabled.
+		for _, m := range c.Models {
 			if _, ok := seen[m.ID]; ok {
 				continue
 			}

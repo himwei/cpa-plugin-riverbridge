@@ -173,13 +173,26 @@ tr.lvl-error td { color: var(--err); }
 .choice .d { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .choice input { width: auto; margin: 0; }
 .modellist { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+/* A model chip is a real checkbox: ticking it enables the model, clearing it
+   removes the model from what CPA advertises. Changes stay local until the
+   operator saves, so a mis-click costs nothing. */
 .mchip {
-  font-size: 11.5px; padding: 4px 9px; border-radius: 20px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px;
+  padding: 4px 10px 4px 7px; border-radius: 20px; cursor: pointer;
   border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; user-select: none;
 }
+.mchip input { width: 13px; height: 13px; margin: 0; accent-color: var(--ok); cursor: pointer; }
 .mchip.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
 .mchip:hover { border-color: var(--accent-2); }
+.mchip.dirty { border-color: var(--warn); }
+.dirtybar {
+  display: flex; align-items: center; gap: 10px; margin-top: 12px;
+  padding-top: 10px; border-top: 1px dashed var(--line);
+  font-size: 12px; color: var(--warn);
+}
+.dirtybar .spacer { flex: 1; }
+.mdot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); margin-right: 6px; }
 .pager { display: flex; gap: 8px; align-items: center; margin-top: 12px; font-size: 12px; color: var(--muted); }
 .pager .spacer { flex: 1; }
 .kv { display: grid; grid-template-columns: 180px 1fr; gap: 8px 14px; font-size: 13px; }
@@ -357,8 +370,14 @@ tr.lvl-error td { color: var(--err); }
     </div>
 
     <div class="card">
-      <h2>全局禁用模型<span class="hint">对所有账号生效，点击切换</span></h2>
+      <h2>全局模型开关<span class="hint">对所有账号生效；勾选＝启用，取消勾选＝从 CPA 的模型列表移除</span></h2>
       <div class="modellist" id="globalModels"></div>
+      <div class="dirtybar" id="globalBar" style="display:none">
+        <span><span class="mdot"></span><span id="globalDirty">全局改动尚未保存</span></span>
+        <div class="spacer"></div>
+        <button class="sm" id="globalReset">还原</button>
+        <button class="sm primary" id="globalSave">保存</button>
+      </div>
       <div class="msg" id="globalMsg"></div>
     </div>
 
@@ -685,10 +704,13 @@ function renderCred(c) {
   const u = c.usage || {};
   const disabledModels = new Set((c.disabled_models || []).map((m) => m.toLowerCase()));
   const chips = (c.models || []).map((m) => {
-    const off = disabledModels.has(String(m.id).toLowerCase());
-    return `<span class="mchip ${off ? "" : "on"}" data-act="toggleModel"
-             data-id="${escapeHTML(c.id)}" data-model="${escapeHTML(m.id)}"
-             title="${off ? "已禁用，点击启用" : "已启用，点击禁用"}">${escapeHTML(m.id)}</span>`;
+    const id = String(m.id);
+    const on = !disabledModels.has(id.toLowerCase());
+    return `<label class="mchip ${on ? "on" : ""}" data-id="${escapeHTML(c.id)}"
+              data-model="${escapeHTML(id)}" title="${escapeHTML(m.upstream || id)}">
+              <input type="checkbox" ${on ? "checked" : ""}>
+              <span>${escapeHTML(id)}</span>
+            </label>`;
   }).join("");
   return `
   <div class="cred ${c.disabled ? "off" : ""}">
@@ -718,7 +740,14 @@ function renderCred(c) {
       <span>可用 ${c.model_count} / ${(c.models || []).length} 个模型</span>
       ${c.priority ? `<span>优先级 <code>${c.priority}</code></span>` : ""}
     </div>
-    <div class="modellist">${chips || '<span style="color:var(--muted);font-size:12px">暂无模型</span>'}</div>
+    <div class="modellist" data-list="${escapeHTML(c.id)}">${
+      chips || '<span style="color:var(--muted);font-size:12px">暂无模型</span>'}</div>
+    <div class="dirtybar" data-bar="${escapeHTML(c.id)}" style="display:none">
+      <span><span class="mdot"></span><span data-dirty-count>模型开关有未保存的改动</span></span>
+      <div class="spacer"></div>
+      <button class="sm" data-act="resetModels" data-id="${escapeHTML(c.id)}">还原</button>
+      <button class="sm primary" data-act="saveModels" data-id="${escapeHTML(c.id)}">保存</button>
+    </div>
     <div class="meta">
       <span>ID <code>${escapeHTML(c.id)}</code></span>
       ${c.updated_at ? `<span>更新 ${escapeHTML(fmtTime(c.updated_at))}</span>` : ""}
@@ -737,6 +766,24 @@ async function patchCredential(body) {
   return call("/credentials", { method: "PATCH", body: JSON.stringify(body) });
 }
 
+// Ticking a model chip only marks the card dirty. Persisting happens on 保存,
+// so the operator can adjust several switches and commit them together.
+$("creds").addEventListener("change", (ev) => {
+  const chip = ev.target.closest(".mchip");
+  if (!chip) return;
+  chip.classList.toggle("on", ev.target.checked);
+  chip.classList.add("dirty");
+  const id = chip.dataset.id;
+  const list = document.querySelector(`.modellist[data-list="${CSS.escape(id)}"]`);
+  const bar = document.querySelector(`.dirtybar[data-bar="${CSS.escape(id)}"]`);
+  if (!list || !bar) return;
+  const total = list.querySelectorAll(".mchip").length;
+  const on = list.querySelectorAll(".mchip input:checked").length;
+  bar.style.display = "";
+  bar.querySelector("[data-dirty-count]").textContent =
+    `可用 ${on} / ${total} 个模型，改动尚未保存`;
+});
+
 $("creds").addEventListener("click", async (ev) => {
   const el = ev.target.closest("[data-act]");
   if (!el) return;
@@ -748,15 +795,19 @@ $("creds").addEventListener("click", async (ev) => {
       // Re-render from the server so the badge and switch cannot disagree.
       await loadCreds();
       await loadStatus();
-    } else if (act === "toggleModel") {
-      const model = el.dataset.model;
+    } else if (act === "saveModels") {
+      const list = document.querySelector(`.modellist[data-list="${CSS.escape(id)}"]`);
+      if (!list) return;
+      const on = [...list.querySelectorAll(".mchip")]
+        .filter((chip) => chip.querySelector("input").checked)
+        .map((chip) => chip.dataset.model);
       const cred = credCache.find((c) => c.id === id);
-      const off = new Set(((cred && cred.disabled_models) || []).map((m) => m.toLowerCase()));
-      const next = off.has(model.toLowerCase())
-        ? [...off].filter((m) => m !== model.toLowerCase())
-        : [...off, model.toLowerCase()];
-      await patchCredential({ id: id, disabled_models: next });
+      const all = ((cred && cred.models) || []).map((m) => String(m.id));
+      const off = all.filter((m) => !on.includes(m)).map((m) => m.toLowerCase());
+      await patchCredential({ id: id, disabled_models: off });
       await Promise.all([loadCreds(), loadModels()]);
+    } else if (act === "resetModels") {
+      await loadCreds();
     } else if (act === "rename") {
       const cred = credCache.find((c) => c.id === id);
       const name = prompt("备注名（留空则回退到 ID）", (cred && cred.remark) || "");
@@ -923,30 +974,49 @@ $("saveRouting").addEventListener("click", async () => {
 });
 $("reloadRouting").addEventListener("click", () => loadSettings());
 
+// The global switch list always contains every known model, including the
+// ones already switched off, so nothing can disappear beyond recovery.
 function renderGlobalModels(models, disabled) {
-  const off = new Set((disabled || []).map((m) => m.toLowerCase()));
+  const off = new Set((disabled || []).map((m) => String(m).toLowerCase()));
   $("globalModels").innerHTML = models.map((m) => {
-    const id = typeof m === "string" ? m : m.id;
-    const isOff = off.has(String(id).toLowerCase());
-    return `<span class="mchip ${isOff ? "" : "on"}" data-model="${escapeHTML(id)}"
-              title="${isOff ? "已全局禁用，点击启用" : "点击全局禁用"}">${escapeHTML(id)}</span>`;
+    const id = String(typeof m === "string" ? m : m.id);
+    const on = !off.has(id.toLowerCase());
+    return `<label class="mchip ${on ? "on" : ""}" data-model="${escapeHTML(id)}">
+              <input type="checkbox" ${on ? "checked" : ""}>
+              <span>${escapeHTML(id)}</span>
+            </label>`;
   }).join("") || '<span style="color:var(--muted);font-size:12px">暂无模型</span>';
+  $("globalBar").style.display = "none";
+  for (const chip of $("globalModels").querySelectorAll(".mchip")) {
+    chip.classList.remove("dirty");
+  }
 }
 
-$("globalModels").addEventListener("click", async () => {
-  const chip = event.target.closest(".mchip");
+$("globalModels").addEventListener("change", (ev) => {
+  const chip = ev.target.closest(".mchip");
   if (!chip) return;
-  const model = chip.dataset.model.toLowerCase();
-  const current = ((settingsCache && settingsCache.settings) || {}).disabled_models || [];
-  const off = new Set(current.map((m) => m.toLowerCase()));
-  if (off.has(model)) off.delete(model); else off.add(model);
+  chip.classList.toggle("on", ev.target.checked);
+  chip.classList.add("dirty");
+  const total = $("globalModels").querySelectorAll(".mchip").length;
+  const on = $("globalModels").querySelectorAll(".mchip input:checked").length;
+  $("globalBar").style.display = "";
+  $("globalDirty").textContent = `全局启用 ${on} / ${total} 个模型，改动尚未保存`;
+});
+
+$("globalSave").addEventListener("click", async () => {
+  const off = [...$("globalModels").querySelectorAll(".mchip")]
+    .filter((chip) => !chip.querySelector("input").checked)
+    .map((chip) => chip.dataset.model.toLowerCase());
   try {
-    await call("/settings", { method: "POST", body: JSON.stringify({ disabled_models: [...off] }) });
-    await Promise.all([loadSettings(), loadModels()]);
+    await call("/settings", { method: "POST", body: JSON.stringify({ disabled_models: off }) });
+    showMsg($("globalMsg"), "全局模型开关已保存", "ok");
+    await Promise.all([loadSettings(), loadModels(), loadCreds()]);
   } catch (e) {
     showMsg($("globalMsg"), e.message, "err");
   }
 });
+
+$("globalReset").addEventListener("click", () => loadSettings());
 
 $("saveSettings").addEventListener("click", async () => {
   try {

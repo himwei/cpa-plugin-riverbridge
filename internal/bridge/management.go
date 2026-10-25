@@ -204,11 +204,14 @@ func (s *Service) managementCredentials() (any, error) {
 			Disabled:       c.Disabled,
 			Priority:       c.Priority,
 			DisabledModels: nonNilStrings(c.DisabledModels),
-			ModelCount:     len(c.AdvertisedModels(cfg)),
-			Models:         c.AdvertisedModels(cfg),
-			CreatedAt:      c.CreatedAt,
-			UpdatedAt:      c.UpdatedAt,
-			Usage:          stats[c.ID],
+			// Models stays the full list on purpose: the console draws one
+			// chip per model and needs the disabled ones back in order to
+			// switch them on again. ModelCount is what the host advertises.
+			ModelCount: len(c.AdvertisedModels(cfg)),
+			Models:     c.Models,
+			CreatedAt:  c.CreatedAt,
+			UpdatedAt:  c.UpdatedAt,
+			Usage:      stats[c.ID],
 		})
 	}
 	sort.Slice(views, func(i, j int) bool { return views[i].ID < views[j].ID })
