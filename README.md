@@ -72,6 +72,18 @@ anything to disk, so an unusable key never reaches the auth directory. The key
 becomes a normal CPA auth record; the console shows its models, token usage and
 accumulated cost.
 
+The console has four tabs:
+
+- **日志 (logs)** — every request, newest first, filterable by level, account,
+  model and free text. Paged, with NDJSON export.
+- **账号配置 (accounts)** — one card per key: enable/disable it, rename it, set a
+  priority, and switch individual models off. A model you switch off stops
+  appearing in `/v1/models` for that key instead of failing at request time.
+- **路由策略 (routing)** — fill-first (always use the highest-priority enabled
+  key) or round-robin (spread across keys), plus retry-on-failure.
+- **设置概览 (settings)** — runtime overview, log retention, request timeout,
+  and models blocked across every key.
+
 The console's API calls go to `/v0/management/riverbridge/*`, which CPA guards
 with the management key. If you are logged into CPA's management center with
 "remember credentials" on, RiverBridge reuses that session; otherwise it shows
@@ -96,9 +108,40 @@ runtime through the console, which persists to
 | --- | --- | --- |
 | `data_dir` | `plugins/riverbridge-data` | Plugin state (settings, usage) |
 | `base_url` | `https://api.river.ai/v1` | Upstream for every credential |
+| `strategy` | `fill-first` | `fill-first` or `round-robin` |
+| `retry_on_failure` | `true` | Cool a failed key down and try another |
+| `disabled_models` | `[]` | Models blocked across every key |
 | `log_retention` | `300` | Diagnostic log lines kept in memory |
 | `request_timeout_seconds` | `600` | One upstream call's deadline |
 | `include_stream_usage` | `true` | Ask River for usage on streaming calls |
+
+`data_dir` is read-only from the console: it decides where state is loaded at
+startup, so changing it from a running process would strand existing keys.
+
+### How account state reaches CPA
+
+Two host behaviours are worth knowing if you modify this plugin.
+
+Credentials are written **straight to the auth file**, not through
+`host.auth.save`. The host rebuilds the record from the file it just wrote, and
+that rebuild resets `disabled` — so a save through the RPC turned a disabled key
+back on every time. A direct write leaves the file authoritative and lets CPA's
+file watcher re-parse it, exactly as it does for a hand edit.
+
+Blocking a model changes every key's advertised list without editing any key, so
+RiverBridge bumps each auth's model revision and re-publishes the file. The host
+caches model lists per file hash and would otherwise keep advertising a model
+you just blocked.
+
+### The scheduler capability
+
+RiverBridge implements CPA's `scheduler.pick`, so a pool can be steered per
+request. CPA consults only the **first** plugin that declares a scheduler, and
+plugins load in filename order — another plugin may hold that slot. The routing
+tab shows the live pick count, so you can tell whether RiverBridge is choosing
+or whether the choice is being delegated to CPA's built-in strategy. Either way
+the strategy you select stays in effect, because an ineligible request falls
+back to the built-in behaviour rather than failing.
 
 ## Streaming
 
