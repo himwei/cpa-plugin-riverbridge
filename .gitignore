@@ -1,0 +1,15 @@
+# Build artifacts
+dist/
+*.so
+*.dll
+*.dylib
+riverbridge.h
+
+# Test output
+*.test
+coverage.out
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
