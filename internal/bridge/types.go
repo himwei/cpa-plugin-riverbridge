@@ -19,7 +19,7 @@ const (
 	PluginID   = "riverbridge"
 	Provider   = "river"
 	Name       = "RiverBridge"
-	Version    = "0.1.0"
+	Version    = "0.2.0"
 	Repository = "https://github.com/himwei/riverbridge"
 
 	// ModelPrefix separates River models from every other provider's models in
@@ -76,13 +76,30 @@ func HostErrorDetails(err error) (string, int) {
 // Credential is the plugin-owned auth payload. It is both the on-disk auth file
 // body and the StorageJSON the host hands back on each execution.
 type Credential struct {
-	Type     string `json:"type"`
-	ID       string `json:"id"`
+	Type string `json:"type"`
+	ID   string `json:"id"`
+	// Remark is the operator-facing name shown in the console and as the auth
+	// label. Label is kept for records written by 0.1.0 and is migrated into
+	// Remark on load.
+	Remark   string `json:"remark,omitempty"`
 	Label    string `json:"label,omitempty"`
 	APIKey   string `json:"api_key"`
 	BaseURL  string `json:"base_url,omitempty"`
 	ProxyURL string `json:"proxy_url,omitempty"`
-	Disabled bool   `json:"disabled,omitempty"`
+	// Disabled takes the credential out of rotation entirely: the scheduler
+	// stops offering it and its models stop being advertised.
+	//
+	// No omitempty on purpose. The host rebuilds the auth file by layering the
+	// metadata it was handed over the previously stored JSON, so a key left
+	// absent keeps its old value: clearing "disabled" would silently revert to
+	// the record being disabled. Always emitting the field makes false and []
+	// expressible instead of merely absent.
+	Disabled bool `json:"disabled"`
+	// DisabledModels lists plugin-facing model ids this key must not serve.
+	// An empty list means every discovered model is available.
+	DisabledModels []string `json:"disabled_models"`
+	// Priority biases both fill-first and round-robin ordering: higher wins.
+	Priority int `json:"priority,omitempty"`
 
 	// Models caches what this key can actually reach upstream. It is refreshed
 	// when the key is added and by the management API on demand.
@@ -94,6 +111,68 @@ type Credential struct {
 
 	CreatedAt string `json:"created_at,omitempty"`
 	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+// DisplayName is the operator-facing name for a credential.
+func (c Credential) DisplayName() string {
+	if v := strings.TrimSpace(c.Remark); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(c.Label); v != "" {
+		return v
+	}
+	return c.ID
+}
+
+// ModelDisabled reports whether the operator switched this model off for the
+// credential.
+func (c Credential) ModelDisabled(model string) bool {
+	for _, m := range c.DisabledModels {
+		if strings.EqualFold(strings.TrimSpace(m), strings.TrimSpace(model)) {
+			return true
+		}
+	}
+	return false
+}
+
+// EnabledModels is the credential's model list minus the disabled entries. It
+// is what the host advertises for this auth.
+func (c Credential) EnabledModels() []DiscoveredModel {
+	if len(c.DisabledModels) == 0 {
+		return c.Models
+	}
+	out := make([]DiscoveredModel, 0, len(c.Models))
+	for _, m := range c.Models {
+		if !c.ModelDisabled(m.ID) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// AdvertisedModels is the list this credential actually publishes: its own
+// enabled models minus everything blocked globally. Both the registration
+// payload and the revision hash come from here, so flipping a global model
+// changes the hash and makes the host re-read the auth.
+func (c Credential) AdvertisedModels(cfg Config) []DiscoveredModel {
+	blocked := cfg.DisabledModels
+	if len(blocked) == 0 && len(c.DisabledModels) == 0 {
+		return c.Models
+	}
+	out := make([]DiscoveredModel, 0, len(c.Models))
+	for _, m := range c.EnabledModels() {
+		skip := false
+		for _, b := range blocked {
+			if strings.EqualFold(strings.TrimSpace(b), m.ID) {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // DiscoveredModel is one upstream River model reachable by a credential.
@@ -117,6 +196,14 @@ func (c Credential) BaseURLOrDefault() string {
 	return DefaultBaseURL
 }
 
+// Routing strategies. "fill-first" keeps using the highest-priority enabled
+// key until it fails, which preserves prompt-cache affinity. "round-robin"
+// spreads requests across every enabled key.
+const (
+	StrategyFillFirst  = "fill-first"
+	StrategyRoundRobin = "round-robin"
+)
+
 // Config is the plugin configuration decoded from plugins.configs.riverbridge.
 // It is layered: the YAML in config.yaml first, then settings.json written by
 // the management UI.
@@ -130,6 +217,14 @@ type Config struct {
 	RequestTimeoutSeconds int `json:"request_timeout_seconds" yaml:"request_timeout_seconds"`
 	// IncludeStreamUsage asks River to report token usage on streaming calls.
 	IncludeStreamUsage bool `json:"include_stream_usage" yaml:"include_stream_usage"`
+	// Strategy selects how an auth is picked for the next request.
+	Strategy string `json:"strategy" yaml:"strategy"`
+	// RetryOnFailure lets the scheduler skip a key that just failed instead of
+	// handing it the next request.
+	RetryOnFailure bool `json:"retry_on_failure" yaml:"retry_on_failure"`
+	// DisabledModels applies to every credential, in addition to the per-key
+	// list. Useful for retiring a model account-wide.
+	DisabledModels []string `json:"disabled_models" yaml:"disabled_models"`
 }
 
 func defaultConfig() Config {
@@ -139,6 +234,8 @@ func defaultConfig() Config {
 		LogRetention:          300,
 		RequestTimeoutSeconds: 600,
 		IncludeStreamUsage:    true,
+		Strategy:              StrategyFillFirst,
+		RetryOnFailure:        true,
 	}
 }
 
@@ -156,6 +253,37 @@ func (c *Config) normalize() {
 	if c.RequestTimeoutSeconds <= 0 {
 		c.RequestTimeoutSeconds = 600
 	}
+	// Accept the same aliases CPA's own routing endpoint takes, so a value
+	// pasted from there behaves identically here instead of silently reverting
+	// to fill-first.
+	switch strings.ToLower(strings.TrimSpace(c.Strategy)) {
+	case StrategyRoundRobin, "rr", "roundrobin", "round_robin":
+		c.Strategy = StrategyRoundRobin
+	default:
+		c.Strategy = StrategyFillFirst
+	}
+	c.DisabledModels = normalizeModelList(c.DisabledModels)
+}
+
+// normalizeModelList trims, lowercases and dedupes model ids.
+func normalizeModelList(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, raw := range in {
+		v := strings.ToLower(strings.TrimSpace(raw))
+		if v == "" {
+			continue
+		}
+		if _, dup := seen[v]; dup {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
 }
 
 func jsonBytes(v any) []byte {

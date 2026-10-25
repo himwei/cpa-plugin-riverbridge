@@ -2,7 +2,9 @@ package bridge
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestModelIDPrefixesAndStripsVendor(t *testing.T) {
@@ -204,5 +206,222 @@ func TestStreamRequestDecodesStreamID(t *testing.T) {
 	}
 	if r.requestPath() != "/v1/messages" {
 		t.Errorf("requestPath = %q, want /v1/messages", r.requestPath())
+	}
+}
+
+func TestDisplayNamePrefersRemark(t *testing.T) {
+	c := Credential{ID: "abc123", Label: "legacy"}
+	if got := c.DisplayName(); got != "legacy" {
+		t.Fatalf("DisplayName = %q, want the legacy label", got)
+	}
+	c.Remark = "主号"
+	if got := c.DisplayName(); got != "主号" {
+		t.Fatalf("DisplayName = %q, want the remark", got)
+	}
+	c.Remark = ""
+	c.Label = ""
+	if got := c.DisplayName(); got != "abc123" {
+		t.Fatalf("DisplayName = %q, want the id as last resort", got)
+	}
+}
+
+func TestModelDisabledMatchesCaseInsensitively(t *testing.T) {
+	c := Credential{DisabledModels: []string{"DeepSeek-V4.1-Flash"}}
+	if !c.ModelDisabled("river-deepseek-v4.1-flash") && c.ModelDisabled("deepseek-v4.1-flash") != true {
+		t.Fatal("expected the disabled model to match regardless of case")
+	}
+	if c.ModelDisabled("glm-5.3-flash") {
+		t.Fatal("an unrelated model must stay enabled")
+	}
+}
+
+func TestEnabledModelsDropsDisabledAndKeepsOrder(t *testing.T) {
+	c := Credential{
+		Models: []DiscoveredModel{
+			{ID: "river-a"}, {ID: "river-b"}, {ID: "river-c"},
+		},
+		DisabledModels: []string{"river-b"},
+	}
+	got := c.EnabledModels()
+	if len(got) != 2 || got[0].ID != "river-a" || got[1].ID != "river-c" {
+		t.Fatalf("EnabledModels = %+v, want a and c", got)
+	}
+}
+
+func TestNormalizeModelListTrimsAndDedupes(t *testing.T) {
+	got := normalizeModelList([]string{" River-A ", "river-a", "", "GLM"})
+	if len(got) != 2 || got[0] != "river-a" || got[1] != "glm" {
+		t.Fatalf("normalizeModelList = %v, want [river-a glm]", got)
+	}
+}
+
+func TestStrategyNormalizeAcceptsAliases(t *testing.T) {
+	cases := map[string]string{
+		"":            StrategyFillFirst,
+		"rr":          StrategyRoundRobin,
+		"round-robin": StrategyRoundRobin,
+		"ROUNDROBIN":  StrategyRoundRobin,
+		"ff":          StrategyFillFirst,
+		"fillfirst":   StrategyFillFirst,
+		"nonsense":    StrategyFillFirst,
+	}
+	for in, want := range cases {
+		c := Config{Strategy: in}
+		c.normalize()
+		if c.Strategy != want {
+			t.Errorf("normalize(%q).Strategy = %q, want %q", in, c.Strategy, want)
+		}
+	}
+}
+
+func TestRoundRobinAdvanceIsPerModel(t *testing.T) {
+	rr := newRoundRobin()
+	if a, b, c := rr.advance("m1"), rr.advance("m1"), rr.advance("m2"); a != 0 || b != 1 || c != 0 {
+		t.Fatalf("advance = %d,%d,%d; want 0,1,0", a, b, c)
+	}
+}
+
+func TestCooldownWindowExpires(t *testing.T) {
+	cd := newCooldowns(10 * time.Millisecond)
+	cd.mark("a")
+	if !cd.active("a") {
+		t.Fatal("a freshly marked auth should be cooling down")
+	}
+	cd.clear("a")
+	if cd.active("a") {
+		t.Fatal("clear should end the cooldown")
+	}
+	cd.mark("b")
+	time.Sleep(20 * time.Millisecond)
+	if cd.active("b") {
+		t.Fatal("the cooldown should have expired")
+	}
+}
+
+func TestPickAuthFiltersDisabledAndBlocked(t *testing.T) {
+	svc := &Service{
+		cfg:      Config{Strategy: StrategyFillFirst},
+		creds:    map[string]Credential{},
+		rr:       newRoundRobin(),
+		cooldown: newCooldowns(time.Second),
+	}
+	svc.creds["on"] = Credential{ID: "on", Type: Provider}
+	svc.creds["off"] = Credential{ID: "off", Type: Provider, Disabled: true}
+	svc.creds["blocked"] = Credential{
+		ID: "blocked", Type: Provider, DisabledModels: []string{"river-x"},
+	}
+
+	raw, _ := json.Marshal(map[string]any{
+		"Model":     "river-x",
+		"Providers": []string{Provider},
+		"Candidates": []map[string]any{
+			{"ID": "off", "Provider": Provider},
+			{"ID": "blocked", "Provider": Provider},
+			{"ID": "on", "Provider": Provider},
+		},
+	})
+	got, err := svc.pickAuth(raw)
+	if err != nil {
+		t.Fatalf("pickAuth: %v", err)
+	}
+	m := got.(map[string]any)
+	if m["AuthID"] != "on" {
+		t.Fatalf("pickAuth chose %v, want the only enabled candidate", m["AuthID"])
+	}
+}
+
+func TestPickAuthDelegatesWhenNothingIsEligible(t *testing.T) {
+	svc := &Service{
+		cfg:      Config{Strategy: StrategyRoundRobin},
+		creds:    map[string]Credential{"off": {ID: "off", Disabled: true}},
+		rr:       newRoundRobin(),
+		cooldown: newCooldowns(time.Second),
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"Providers":  []string{Provider},
+		"Candidates": []map[string]any{{"ID": "off", "Provider": Provider}},
+	})
+	got, err := svc.pickAuth(raw)
+	if err != nil {
+		t.Fatalf("pickAuth: %v", err)
+	}
+	m := got.(map[string]any)
+	if m["DelegateBuiltin"] != "round-robin" {
+		t.Fatalf("pickAuth = %+v, want a delegation to the builtin", m)
+	}
+}
+
+func TestPickAuthIgnoresForeignProviders(t *testing.T) {
+	svc := &Service{cfg: Config{}, creds: map[string]Credential{}, rr: newRoundRobin()}
+	raw, _ := json.Marshal(map[string]any{
+		"Providers":  []string{"deepseek"},
+		"Candidates": []map[string]any{{"ID": "x", "Provider": "deepseek"}},
+	})
+	got, err := svc.pickAuth(raw)
+	if err != nil {
+		t.Fatalf("pickAuth: %v", err)
+	}
+	if m := got.(map[string]any); m["Handled"] != false {
+		t.Fatalf("pickAuth = %+v, want Handled=false for another provider", m)
+	}
+}
+
+func TestDescribePatchNamesEveryChange(t *testing.T) {
+	remark := "主号"
+	disabled := true
+	models := []string{"river-a"}
+	got := describePatch(patchRequest{Remark: &remark, Disabled: &disabled, Models: &models})
+	for _, want := range []string{"renamed to 主号", "disabled", "disabled models=1"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("describePatch = %q, want it to mention %q", got, want)
+		}
+	}
+}
+
+func TestAtoiDefaultFallsBackOnJunk(t *testing.T) {
+	if got := atoiDefault("", 7); got != 7 {
+		t.Errorf("empty = %d, want the fallback", got)
+	}
+	if got := atoiDefault("x", 7); got != 7 {
+		t.Errorf("junk = %d, want the fallback", got)
+	}
+	if got := atoiDefault("42", 7); got != 42 {
+		t.Errorf("42 = %d, want 42", got)
+	}
+}
+
+func TestAdvertisedModelsHonoursGlobalBlocks(t *testing.T) {
+	c := Credential{
+		Models: []DiscoveredModel{
+			{ID: "river-a"}, {ID: "river-b"}, {ID: "river-c"},
+		},
+	}
+	cfg := Config{DisabledModels: []string{"river-b"}}
+	got := c.AdvertisedModels(cfg)
+	if len(got) != 2 || got[0].ID != "river-a" || got[1].ID != "river-c" {
+		t.Fatalf("global block not applied: %#v", got)
+	}
+	if len(c.AdvertisedModels(Config{})) != 3 {
+		t.Fatal("an empty block list must keep every model")
+	}
+}
+
+func TestAdvertisedModelsCombinesPerCredentialAndGlobalBlocks(t *testing.T) {
+	c := Credential{
+		Models:         []DiscoveredModel{{ID: "river-a"}, {ID: "river-b"}, {ID: "river-c"}},
+		DisabledModels: []string{"river-a"},
+	}
+	got := c.AdvertisedModels(Config{DisabledModels: []string{"river-c"}})
+	if len(got) != 1 || got[0].ID != "river-b" {
+		t.Fatalf("expected only river-b, got %#v", got)
+	}
+}
+
+func TestRevisionTracksGlobalBlocks(t *testing.T) {
+	c := Credential{Models: []DiscoveredModel{{ID: "river-a"}, {ID: "river-b"}}}
+	before := revisionOf(c.AdvertisedModels(Config{}))
+	after := revisionOf(c.AdvertisedModels(Config{DisabledModels: []string{"river-b"}}))
+	if before == after {
+		t.Fatal("blocking a model globally must change the revision")
 	}
 }

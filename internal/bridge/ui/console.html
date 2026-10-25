@@ -52,6 +52,18 @@ header h1 { font-size: 16px; margin: 0; font-weight: 600; }
 header .sub { color: var(--muted); font-size: 12px; }
 header .spacer { flex: 1; }
 main { max-width: 1180px; margin: 0 auto; padding: 22px; }
+.tabs {
+  display: flex; gap: 4px; padding: 0 22px; background: var(--panel);
+  border-bottom: 1px solid var(--line); position: sticky; top: 63px; z-index: 9;
+  max-width: none; overflow-x: auto;
+}
+.tabs button {
+  background: none; border: none; border-bottom: 2px solid transparent;
+  border-radius: 0; padding: 11px 14px; color: var(--muted); font-size: 13.5px;
+  white-space: nowrap;
+}
+.tabs button:hover { color: var(--text); }
+.tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -62,7 +74,7 @@ main { max-width: 1180px; margin: 0 auto; padding: 22px; }
 .card h2 { font-size: 14px; margin: 0 0 12px; font-weight: 600; }
 .card h2 .hint { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 8px; }
 label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-input[type=text], input[type=password], select {
+input[type=text], input[type=password], input[type=number], select {
   width: 100%;
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -90,15 +102,17 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button.primary:hover { background: var(--accent-2); }
 button.danger { color: var(--err); }
 button.danger:hover { border-color: var(--err); }
+button.sm { padding: 5px 10px; font-size: 12px; }
 button:disabled { opacity: .5; cursor: default; }
-.actions { display: flex; gap: 10px; margin-top: 14px; align-items: center; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
+.actions { display: flex; gap: 10px; margin-top: 14px; align-items: center; flex-wrap: wrap; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
 .cred {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 14px 16px;
 }
+.cred.off { opacity: .62; }
 .cred .top { display: flex; align-items: flex-start; gap: 8px; }
 .cred .name { font-weight: 600; font-size: 14px; word-break: break-all; }
 .cred .key {
@@ -110,9 +124,10 @@ button:disabled { opacity: .5; cursor: default; }
 .cred .spacer { flex: 1; }
 .badge {
   font-size: 11px; padding: 2px 8px; border-radius: 20px;
-  border: 1px solid var(--line); color: var(--muted);
+  border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
 }
 .badge.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+.badge.off { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
 .badge.err { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, var(--line)); }
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
 .stat { background: var(--panel-2); border-radius: 8px; padding: 8px 10px; }
@@ -124,23 +139,58 @@ table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 500; font-size: 11.5px; }
 td code, th code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+tr.lvl-warn td { color: var(--warn); }
+tr.lvl-error td { color: var(--err); }
 .msg { font-size: 12.5px; margin-top: 12px; padding: 9px 12px; border-radius: 8px; display: none; }
 .msg.show { display: block; }
 .msg.ok { background: color-mix(in srgb, var(--ok) 12%, transparent); color: var(--ok); }
 .msg.err { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); }
 .msg.info { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
 .empty { color: var(--muted); font-size: 13px; padding: 22px; text-align: center; }
-pre {
-  background: var(--panel-2); border-radius: 8px; padding: 12px;
-  font-size: 11.5px; overflow: auto; max-height: 260px; margin: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+.toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
 .toolbar .spacer { flex: 1; }
 .totals { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; }
+.switch { position: relative; display: inline-block; width: 38px; height: 21px; flex: none; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch span {
+  position: absolute; inset: 0; background: var(--line); border-radius: 20px;
+  transition: background .15s; cursor: pointer;
+}
+.switch span::after {
+  content: ""; position: absolute; width: 15px; height: 15px; left: 3px; top: 3px;
+  background: #fff; border-radius: 50%; transition: transform .15s;
+}
+.switch input:checked + span { background: var(--accent); }
+.switch input:checked + span::after { transform: translateX(17px); }
+.switch input:disabled + span { opacity: .5; cursor: default; }
+.choice {
+  display: block; border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px 14px; margin-bottom: 10px; cursor: pointer; background: var(--panel-2);
+}
+.choice.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--panel-2)); }
+.choice .t { font-weight: 600; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
+.choice .d { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.choice input { width: auto; margin: 0; }
+.modellist { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.mchip {
+  font-size: 11.5px; padding: 4px 9px; border-radius: 20px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.mchip.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+.mchip:hover { border-color: var(--accent-2); }
+.pager { display: flex; gap: 8px; align-items: center; margin-top: 12px; font-size: 12px; color: var(--muted); }
+.pager .spacer { flex: 1; }
+.kv { display: grid; grid-template-columns: 180px 1fr; gap: 8px 14px; font-size: 13px; }
+.kv .k { color: var(--muted); }
+.kv .v { font-variant-numeric: tabular-nums; }
 @media (max-width: 720px) {
   .row { flex-direction: column; }
   .totals { grid-template-columns: repeat(2, 1fr); }
+  .kv { grid-template-columns: 1fr; }
+  .kv .k { font-size: 11px; }
+  .tabs { top: 0; position: static; }
 }
 </style>
 </head>
@@ -155,67 +205,173 @@ pre {
   <div class="sub" id="status">连接中…</div>
 </header>
 
+<div class="tabs" id="tabs">
+  <button data-tab="logs" class="active">日志</button>
+  <button data-tab="accounts">账号配置</button>
+  <button data-tab="routing">路由策略</button>
+  <button data-tab="settings">设置概览</button>
+</div>
+
 <main>
-  <div class="card">
-    <h2>添加 River API Key<span class="hint">在 console.river.ai/keys 创建，形如 rv_…</span></h2>
-    <div class="row">
-      <div style="flex:2">
-        <label for="key">API Key</label>
-        <input type="password" id="key" placeholder="rv_..." autocomplete="off" spellcheck="false">
+  <!-- 日志 -->
+  <section id="tab-logs">
+    <div class="card">
+      <div class="toolbar">
+        <h2 style="margin:0">请求日志<span class="hint" id="logHint"></span></h2>
+        <div class="spacer"></div>
+        <label class="pill" style="margin:0;cursor:pointer">
+          <input type="checkbox" id="autoRefresh" checked style="width:auto;margin:0"> 自动刷新
+        </label>
+        <button id="exportLogs">导出 NDJSON</button>
+        <button class="danger" id="clearLogs">清空</button>
       </div>
-      <div style="flex:1.2">
-        <label for="label">备注名（可选）</label>
-        <input type="text" id="label" placeholder="例如：主号">
+      <div class="row" style="margin-bottom:12px">
+        <div><label>级别</label><select id="fLevel"><option value="all">全部</option></select></div>
+        <div><label>账号</label><select id="fAuth"><option value="all">全部</option></select></div>
+        <div><label>模型</label><select id="fModel"><option value="all">全部</option></select></div>
+        <div style="flex:1.4"><label>关键字</label><input type="text" id="fQuery" placeholder="状态码、错误、模型…"></div>
+      </div>
+      <div style="overflow:auto">
+        <table id="logsTable">
+          <thead><tr><th style="width:150px">时间</th><th style="width:66px">级别</th><th style="width:60px">状态</th>
+            <th style="width:70px">耗时</th><th>模型</th><th>账号</th><th>详情</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <span id="logRange">—</span>
+        <div class="spacer"></div>
+        <button class="sm" id="logPrev">上一页</button>
+        <button class="sm" id="logNext">下一页</button>
       </div>
     </div>
-    <div class="row" style="margin-top:12px">
-      <div>
-        <label for="base">上游地址（可选）</label>
-        <input type="text" id="base" placeholder="https://api.river.ai/v1">
+  </section>
+
+  <!-- 账号配置 -->
+  <section id="tab-accounts" style="display:none">
+    <div class="card">
+      <h2>添加 River API Key<span class="hint">在 console.river.ai/keys 创建，形如 rv_…</span></h2>
+      <div class="row">
+        <div style="flex:2">
+          <label for="key">API Key</label>
+          <input type="password" id="key" placeholder="rv_..." autocomplete="off" spellcheck="false">
+        </div>
+        <div style="flex:1.2">
+          <label for="label">备注名（可选）</label>
+          <input type="text" id="label" placeholder="例如：主号">
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <div>
+          <label for="base">上游地址（可选）</label>
+          <input type="text" id="base" placeholder="https://api.river.ai/v1">
+        </div>
+      </div>
+      <div class="actions">
+        <button class="primary" id="addBtn">验证并添加</button>
+        <div class="sub" style="color:var(--muted);font-size:12px">
+          添加前会向上游验证该 key 可访问的模型
+        </div>
+      </div>
+      <div class="msg" id="addMsg"></div>
+    </div>
+
+    <div class="card">
+      <div class="toolbar">
+        <h2 style="margin:0">账号<span class="hint" id="credCount"></span></h2>
+        <div class="spacer"></div>
+        <button id="refreshBtn">刷新全部模型</button>
+        <button id="reloadBtn">重新加载</button>
+      </div>
+      <div class="grid" id="creds"><div class="empty">加载中…</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Token 用量<span class="hint">来自上游响应中的 usage 字段</span></h2>
+      <div class="totals" id="totals"></div>
+    </div>
+  </section>
+
+  <!-- 路由策略 -->
+  <section id="tab-routing" style="display:none">
+    <div class="card">
+      <h2>请求策略<span class="hint">决定一个请求落到哪个启用账号上</span></h2>
+      <div id="strategyChoices"></div>
+      <div class="actions" style="margin-top:16px">
+        <label class="pill" style="margin:0;cursor:pointer;font-size:13px;color:var(--text)">
+          <input type="checkbox" id="retryOnFailure" style="width:auto;margin:0">
+          失败后自动重试其他账号
+        </label>
+      </div>
+      <div class="actions">
+        <button class="primary" id="saveRouting">保存路由设置</button>
+        <button id="reloadRouting">还原</button>
+      </div>
+      <div class="msg" id="routingMsg"></div>
+    </div>
+
+    <div class="card">
+      <h2>调度器状态<span class="hint">插件调度器是否真的被宿主调用</span></h2>
+      <div class="kv" id="schedState"></div>
+      <div class="meta" style="margin-top:12px">
+        <span>CPA 同时只使用第一个声明调度器的插件；若此处的 picks 一直为 0，说明宿主用的是内置策略，上面的策略选择仍会通过委派生效。</span>
       </div>
     </div>
-    <div class="actions">
-      <button class="primary" id="addBtn">验证并添加</button>
-      <div class="sub" style="color:var(--muted);font-size:12px">
-        添加前会向上游验证该 key 可访问的模型
+  </section>
+
+  <!-- 设置概览 -->
+  <section id="tab-settings" style="display:none">
+    <div class="card">
+      <div class="toolbar">
+        <h2 style="margin:0">运行概览</h2>
+        <div class="spacer"></div>
+        <button id="saveSettings">保存设置</button>
+        <button id="reloadSettings">还原</button>
+      </div>
+      <div class="kv" id="overview"></div>
+      <div class="msg" id="settingsMsg"></div>
+    </div>
+
+    <div class="card">
+      <h2>参数</h2>
+      <div class="row">
+        <div>
+          <label for="sLogRetention">日志保留条数</label>
+          <input type="number" id="sLogRetention" min="50" max="20000" step="50">
+        </div>
+        <div>
+          <label for="sTimeout">请求超时（秒）</label>
+          <input type="number" id="sTimeout" min="10" max="3600" step="10">
+        </div>
+        <div>
+          <label for="sBase">上游地址</label>
+          <input type="text" id="sBase" placeholder="https://api.river.ai/v1">
+        </div>
+      </div>
+      <div class="actions">
+        <label class="pill" style="margin:0;cursor:pointer;font-size:13px;color:var(--text)">
+          <input type="checkbox" id="sStreamUsage" style="width:auto;margin:0">
+          流式响应也统计 usage
+        </label>
       </div>
     </div>
-    <div class="msg" id="addMsg"></div>
-  </div>
 
-  <div class="card">
-    <div class="toolbar">
-      <h2 style="margin:0">账号<span class="hint" id="credCount"></span></h2>
-      <div class="spacer"></div>
-      <button id="refreshBtn">刷新模型</button>
-      <button id="reloadBtn">重新加载</button>
+    <div class="card">
+      <h2>全局禁用模型<span class="hint">对所有账号生效，点击切换</span></h2>
+      <div class="modellist" id="globalModels"></div>
+      <div class="msg" id="globalMsg"></div>
     </div>
-    <div class="grid" id="creds"><div class="empty">加载中…</div></div>
-  </div>
 
-  <div class="card">
-    <h2>Token 用量<span class="hint">来自上游响应中的 usage 字段</span></h2>
-    <div class="totals" id="totals"></div>
-  </div>
-
-  <div class="card">
-    <h2>模型<span class="hint" id="modelCount"></span></h2>
-    <div style="overflow:auto">
-      <table id="models">
-        <thead><tr><th>对外模型名</th><th>上游模型</th><th>上下文</th><th>最大输出</th><th>可用账号</th></tr></thead>
-        <tbody></tbody>
-      </table>
+    <div class="card">
+      <h2>内置模型目录<span class="hint" id="modelCount"></span></h2>
+      <div style="overflow:auto">
+        <table id="models">
+          <thead><tr><th>对外模型名</th><th>上游模型</th><th>上下文</th><th>最大输出</th><th>可用账号</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
-  </div>
-
-  <div class="card">
-    <div class="toolbar">
-      <h2 style="margin:0">诊断日志</h2>
-      <div class="spacer"></div>
-      <button id="clearLogs">清空</button>
-    </div>
-    <pre id="logs">加载中…</pre>
-  </div>
+  </section>
 </main>
 
 <div id="lock" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);
@@ -332,6 +488,10 @@ function fmtCost(v) {
   return "$" + v.toFixed(4);
 }
 
+function fmtTime(s) {
+  return s ? String(s).replace("T", " ").slice(0, 19) : "";
+}
+
 function escapeHTML(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
@@ -359,22 +519,158 @@ async function call(path, options) {
   return body;
 }
 
+/* ---------- tabs ---------- */
+
+let activeTab = "logs";
+const LOADERS = {
+  logs: () => loadLogs(),
+  accounts: () => Promise.all([loadCreds(), loadUsage()]),
+  routing: () => loadSettings(),
+  settings: () => Promise.all([loadSettings(), loadModels()]),
+};
+
+function selectTab(name) {
+  activeTab = name;
+  for (const btn of document.querySelectorAll("#tabs button")) {
+    btn.classList.toggle("active", btn.dataset.tab === name);
+  }
+  for (const sec of document.querySelectorAll("main > section")) {
+    sec.style.display = (sec.id === "tab-" + name) ? "" : "none";
+  }
+  (LOADERS[name] || (() => {}))().catch(() => {});
+}
+
+$("tabs").addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button[data-tab]");
+  if (btn) selectTab(btn.dataset.tab);
+});
+
+/* ---------- status ---------- */
+
 async function loadStatus() {
   try {
     const s = await call("/status");
+    const sch = s.scheduler || {};
     $("status").textContent =
-      `v${s.version} · ${s.credentials} 个账号 · ${s.models} 个内置模型`;
+      `v${s.version} · ${s.credentials} 个账号 · ${s.strategy || "fill-first"}` +
+      (sch.picks ? ` · 调度 ${sch.picks} 次` : "");
   } catch (e) {
     $("status").textContent = "状态不可用";
   }
 }
+
+/* ---------- logs ---------- */
+
+let logOffset = 0;
+const LOG_LIMIT = 100;
+let logTotal = 0;
+
+function fillSelect(el, values, counts, allLabel) {
+  const current = el.value;
+  const opts = [`<option value="all">${allLabel}</option>`];
+  for (const v of values) {
+    const n = counts && counts[v] ? ` (${counts[v]})` : "";
+    opts.push(`<option value="${escapeHTML(v)}">${escapeHTML(v)}${n}</option>`);
+  }
+  el.innerHTML = opts.join("");
+  if ([...el.options].some((o) => o.value === current)) el.value = current;
+}
+
+async function loadLogs() {
+  const params = new URLSearchParams({
+    limit: String(LOG_LIMIT),
+    offset: String(logOffset),
+  });
+  const level = $("fLevel").value;
+  const auth = $("fAuth").value;
+  const model = $("fModel").value;
+  const q = $("fQuery").value.trim();
+  if (level && level !== "all") params.set("level", level);
+  if (auth && auth !== "all") params.set("auth_id", auth);
+  if (model && model !== "all") params.set("model", model);
+  if (q) params.set("q", q);
+
+  try {
+    const data = await call("/logs?" + params.toString());
+    const logs = data.logs || [];
+    logTotal = data.total || 0;
+    const tbody = $("logsTable").querySelector("tbody");
+    if (!logs.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty">没有符合条件的日志</td></tr>';
+    } else {
+      tbody.innerHTML = logs.map((l) => `
+        <tr class="lvl-${escapeHTML(l.level || "")}">
+          <td>${escapeHTML(fmtTime(l.time))}</td>
+          <td>${escapeHTML((l.level || "").toUpperCase())}</td>
+          <td>${l.status ? escapeHTML(l.status) : "—"}</td>
+          <td>${l.ms ? escapeHTML(l.ms) + "ms" : "—"}</td>
+          <td><code>${escapeHTML(l.model || "—")}</code></td>
+          <td><code>${escapeHTML((l.auth_id || "—").slice(0, 10))}</code></td>
+          <td>${escapeHTML(l.detail || "")}</td>
+        </tr>`).join("");
+    }
+    const from = logTotal ? logOffset + 1 : 0;
+    const to = Math.min(logOffset + LOG_LIMIT, logTotal);
+    $("logRange").textContent = `第 ${from}–${to} 条 / 共 ${logTotal} 条`;
+    $("logHint").textContent = data.retention ? `（保留最近 ${data.retention} 条）` : "";
+    $("logPrev").disabled = logOffset <= 0;
+    $("logNext").disabled = logOffset + LOG_LIMIT >= logTotal;
+
+    const facets = data.facets || {};
+    fillSelect($("fLevel"), Object.keys(facets.levels || {}).sort(), facets.levels, "全部");
+    fillSelect($("fAuth"), Object.keys(facets.auth_ids || {}).sort(), facets.auth_ids, "全部");
+    fillSelect($("fModel"), Object.keys(facets.models || {}).sort(), facets.models, "全部");
+  } catch (e) {
+    $("logsTable").querySelector("tbody").innerHTML =
+      `<tr><td colspan="7" class="empty">${escapeHTML(e.message)}</td></tr>`;
+  }
+}
+
+for (const id of ["fLevel", "fAuth", "fModel"]) {
+  $(id).addEventListener("change", () => { logOffset = 0; loadLogs(); });
+}
+$("fQuery").addEventListener("input", () => {
+  clearTimeout(window.__logTimer);
+  window.__logTimer = setTimeout(() => { logOffset = 0; loadLogs(); }, 250);
+});
+$("logPrev").addEventListener("click", () => {
+  logOffset = Math.max(0, logOffset - LOG_LIMIT); loadLogs();
+});
+$("logNext").addEventListener("click", () => {
+  if (logOffset + LOG_LIMIT < logTotal) { logOffset += LOG_LIMIT; loadLogs(); }
+});
+$("clearLogs").addEventListener("click", async () => {
+  if (!confirm("清空所有日志？账号与用量不受影响。")) return;
+  try { await call("/logs/clear", { method: "POST" }); logOffset = 0; await loadLogs(); }
+  catch (e) { alert(e.message); }
+});
+$("exportLogs").addEventListener("click", async () => {
+  try {
+    const res = await fetch(API + "/logs/export", { headers: authHeaders() });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "riverbridge-logs.ndjson";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+  } catch (e) { alert(e.message); }
+});
+
+/* ---------- credentials ---------- */
+
+let credCache = [];
 
 async function loadCreds() {
   const box = $("creds");
   try {
     const data = await call("/credentials");
     const list = data.credentials || [];
-    $("credCount").textContent = list.length ? `（${list.length}）` : "";
+    credCache = list;
+    const off = list.filter((c) => c.disabled).length;
+    $("credCount").textContent = list.length
+      ? `（${list.length} 个，${list.length - off} 启用 / ${off} 禁用）` : "";
     if (!list.length) {
       box.innerHTML = '<div class="empty">还没有账号，先在上方添加一个 River API Key</div>';
       return;
@@ -387,19 +683,27 @@ async function loadCreds() {
 
 function renderCred(c) {
   const u = c.usage || {};
-  const okClass = c.disabled ? "" : "on";
-  const okText = c.disabled ? "已禁用" : "已启用";
-  const models = (c.models || []).slice(0, 6).map((m) => escapeHTML(m.id)).join("、");
-  const more = (c.models || []).length > 6 ? ` 等 ${c.models.length} 个` : "";
+  const disabledModels = new Set((c.disabled_models || []).map((m) => m.toLowerCase()));
+  const chips = (c.models || []).map((m) => {
+    const off = disabledModels.has(String(m.id).toLowerCase());
+    return `<span class="mchip ${off ? "" : "on"}" data-act="toggleModel"
+             data-id="${escapeHTML(c.id)}" data-model="${escapeHTML(m.id)}"
+             title="${off ? "已禁用，点击启用" : "已启用，点击禁用"}">${escapeHTML(m.id)}</span>`;
+  }).join("");
   return `
-  <div class="cred">
+  <div class="cred ${c.disabled ? "off" : ""}">
     <div class="top">
       <div style="min-width:0">
         <div class="name">${escapeHTML(c.label || c.id)}</div>
         <div class="key">${escapeHTML(c.api_key_masked || "")}</div>
       </div>
       <div class="spacer"></div>
-      <span class="badge ${okClass}">${okText}</span>
+      <span class="badge ${c.disabled ? "off" : "on"}">${c.disabled ? "已禁用" : "已启用"}</span>
+      <label class="switch" title="${c.disabled ? "点击启用" : "点击禁用"}">
+        <input type="checkbox" data-act="toggleEnabled" data-id="${escapeHTML(c.id)}"
+               ${c.disabled ? "" : "checked"}>
+        <span></span>
+      </label>
     </div>
     <div class="stats">
       <div class="stat"><div class="k">输入</div><div class="v">${fmtNum(u.input_tokens)}</div></div>
@@ -411,20 +715,260 @@ function renderCred(c) {
       <div class="stat"><div class="k">累计成本</div><div class="v">${fmtCost(u.cost_usd)}</div></div>
     </div>
     <div class="meta">
-      <span>模型：${escapeHTML(models)}${more}</span>
+      <span>可用 ${c.model_count} / ${(c.models || []).length} 个模型</span>
+      ${c.priority ? `<span>优先级 <code>${c.priority}</code></span>` : ""}
     </div>
+    <div class="modellist">${chips || '<span style="color:var(--muted);font-size:12px">暂无模型</span>'}</div>
     <div class="meta">
       <span>ID <code>${escapeHTML(c.id)}</code></span>
-      ${c.updated_at ? `<span>更新 ${escapeHTML(c.updated_at.replace("T", " ").slice(0, 19))}</span>` : ""}
+      ${c.updated_at ? `<span>更新 ${escapeHTML(fmtTime(c.updated_at))}</span>` : ""}
     </div>
     ${u.last_error ? `<div class="meta"><span style="color:var(--err)">最近错误：${escapeHTML(u.last_error)}</span></div>` : ""}
     <div class="actions">
-      <button data-act="test" data-id="${escapeHTML(c.id)}">测试</button>
-      <button data-act="refresh" data-id="${escapeHTML(c.id)}">刷新模型</button>
-      <button class="danger" data-act="delete" data-id="${escapeHTML(c.id)}">删除</button>
+      <button class="sm" data-act="rename" data-id="${escapeHTML(c.id)}">改名</button>
+      <button class="sm" data-act="test" data-id="${escapeHTML(c.id)}">测试</button>
+      <button class="sm" data-act="refresh" data-id="${escapeHTML(c.id)}">刷新模型</button>
+      <button class="sm danger" data-act="delete" data-id="${escapeHTML(c.id)}">删除</button>
     </div>
   </div>`;
 }
+
+async function patchCredential(body) {
+  return call("/credentials", { method: "PATCH", body: JSON.stringify(body) });
+}
+
+$("creds").addEventListener("click", async (ev) => {
+  const el = ev.target.closest("[data-act]");
+  if (!el) return;
+  const act = el.dataset.act;
+  const id = el.dataset.id;
+  try {
+    if (act === "toggleEnabled") {
+      await patchCredential({ id: id, disabled: !el.checked });
+      // Re-render from the server so the badge and switch cannot disagree.
+      await loadCreds();
+      await loadStatus();
+    } else if (act === "toggleModel") {
+      const model = el.dataset.model;
+      const cred = credCache.find((c) => c.id === id);
+      const off = new Set(((cred && cred.disabled_models) || []).map((m) => m.toLowerCase()));
+      const next = off.has(model.toLowerCase())
+        ? [...off].filter((m) => m !== model.toLowerCase())
+        : [...off, model.toLowerCase()];
+      await patchCredential({ id: id, disabled_models: next });
+      await Promise.all([loadCreds(), loadModels()]);
+    } else if (act === "rename") {
+      const cred = credCache.find((c) => c.id === id);
+      const name = prompt("备注名（留空则回退到 ID）", (cred && cred.remark) || "");
+      if (name === null) return;
+      await patchCredential({ id: id, remark: name });
+      await loadCreds();
+    } else if (act === "delete") {
+      if (!confirm("删除这个账号？对应的 auth 文件也会被移除。")) return;
+      await call("/credentials?id=" + encodeURIComponent(id), { method: "DELETE" });
+      await Promise.all([loadCreds(), loadModels(), loadStatus()]);
+    } else if (act === "test") {
+      const res = await call("/credentials/test", {
+        method: "POST", body: JSON.stringify({ id }),
+      });
+      alert("验证通过，可访问 " + res.count + " 个模型");
+    } else if (act === "refresh") {
+      await call("/models/refresh", { method: "POST", body: JSON.stringify({ id }) });
+      await loadCreds();
+    }
+  } catch (e) {
+    alert(e.message);
+    await loadCreds();
+  }
+});
+
+$("addBtn").addEventListener("click", async () => {
+  const btn = $("addBtn");
+  const key = $("key").value.trim();
+  const label = $("label").value.trim();
+  const base = $("base").value.trim();
+  if (!key) { showMsg($("addMsg"), "请填写 API Key", "err"); return; }
+  btn.disabled = true;
+  showMsg($("addMsg"), "正在向上游验证…", "info");
+  try {
+    const res = await call("/credentials", {
+      method: "POST",
+      body: JSON.stringify({ api_key: key, label: label, base_url: base }),
+    });
+    showMsg($("addMsg"), `添加成功，发现 ${res.count} 个模型`, "ok");
+    $("key").value = "";
+    $("label").value = "";
+    await Promise.all([loadCreds(), loadModels(), loadStatus()]);
+  } catch (e) {
+    showMsg($("addMsg"), e.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("refreshBtn").addEventListener("click", async () => {
+  try {
+    await call("/models/refresh", { method: "POST", body: "{}" });
+    await Promise.all([loadCreds(), loadModels()]);
+  } catch (e) { alert(e.message); }
+});
+$("reloadBtn").addEventListener("click", () => Promise.all([loadCreds(), loadUsage()]));
+
+async function loadUsage() {
+  try {
+    const data = await call("/usage");
+    const t = data.totals || {};
+    $("totals").innerHTML = `
+      <div class="stat"><div class="k">请求</div><div class="v">${fmtNum(t.requests)}</div></div>
+      <div class="stat"><div class="k">输入</div><div class="v">${fmtNum(t.input_tokens)}</div></div>
+      <div class="stat"><div class="k">缓存</div><div class="v">${fmtNum(t.cached_tokens)}</div></div>
+      <div class="stat"><div class="k">输出</div><div class="v">${fmtNum(t.output_tokens)}</div></div>
+      <div class="stat"><div class="k">成本</div><div class="v">${fmtCost(t.cost_usd)}</div></div>`;
+  } catch (e) { /* keep the previous totals */ }
+}
+
+/* ---------- settings + routing ---------- */
+
+let settingsCache = null;
+
+async function loadSettings() {
+  try {
+    const data = await call("/settings");
+    settingsCache = data;
+    const s = data.settings || {};
+
+    renderStrategyChoices(data.strategies || [], s.strategy);
+    $("retryOnFailure").checked = !!s.retry_on_failure;
+    renderScheduler(data.scheduler || {});
+
+    $("overview").innerHTML = `
+      <div class="k">版本</div><div class="v">v${escapeHTML(data.version || "")}</div>
+      <div class="k">运行时长</div><div class="v">${fmtUptime(data.uptime_s)}</div>
+      <div class="k">账号</div><div class="v">${
+        (data.credentials || {}).enabled || 0} 启用 / ${
+        (data.credentials || {}).disabled || 0} 禁用</div>
+      <div class="k">当前策略</div><div class="v">${escapeHTML(s.strategy || "")}</div>
+      <div class="k">数据目录</div><div class="v"><code>${escapeHTML(s.data_dir || "")}</code></div>
+      <div class="k">上游地址</div><div class="v"><code>${escapeHTML(s.base_url || "")}</code></div>
+      <div class="k">日志保留</div><div class="v">${escapeHTML(s.log_retention)} 条</div>
+      <div class="k">请求超时</div><div class="v">${escapeHTML(s.request_timeout_seconds)} 秒</div>
+      <div class="k">可用模型</div><div class="v">${(data.models || []).length} 个</div>`;
+
+    $("sLogRetention").value = s.log_retention || 300;
+    $("sTimeout").value = s.request_timeout_seconds || 600;
+    $("sBase").value = s.base_url || "";
+    $("sStreamUsage").checked = s.include_stream_usage !== false;
+    renderGlobalModels(data.models || [], s.disabled_models || []);
+  } catch (e) {
+    $("overview").innerHTML = `<div class="k">错误</div><div class="v">${escapeHTML(e.message)}</div>`;
+  }
+}
+
+function fmtUptime(sec) {
+  if (!sec) return "—";
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d) return `${d} 天 ${h} 小时`;
+  if (h) return `${h} 小时 ${m} 分`;
+  return `${m} 分钟`;
+}
+
+function renderStrategyChoices(strategies, current) {
+  const box = $("strategyChoices");
+  box.innerHTML = strategies.map((s) => `
+    <label class="choice ${s.value === current ? "on" : ""}" data-value="${escapeHTML(s.value)}">
+      <div class="t">
+        <input type="radio" name="strategy" value="${escapeHTML(s.value)}"
+               ${s.value === current ? "checked" : ""}>
+        ${escapeHTML(s.label)}
+      </div>
+      <div class="d">${escapeHTML(s.detail)}</div>
+    </label>`).join("");
+}
+
+$("strategyChoices").addEventListener("change", () => {
+  const picked = $("strategyChoices").querySelector("input[name=strategy]:checked");
+  for (const el of $("strategyChoices").querySelectorAll(".choice")) {
+    el.classList.toggle("on", !!picked && el.dataset.value === picked.value);
+  }
+});
+
+function renderScheduler(sch) {
+  $("schedState").innerHTML = `
+    <div class="k">是否被宿主调用</div>
+    <div class="v">${sch.active ? '<span class="badge on">已接管</span>'
+                               : '<span class="badge">未调用（走内置策略）</span>'}</div>
+    <div class="k">已调度请求</div><div class="v">${fmtNum(sch.picks || 0)}</div>
+    <div class="k">首次调用</div><div class="v">${escapeHTML(fmtTime(sch.first_pick) || "—")}</div>`;
+}
+
+$("saveRouting").addEventListener("click", async () => {
+  const picked = $("strategyChoices").querySelector("input[name=strategy]:checked");
+  if (!picked) { showMsg($("routingMsg"), "请先选择一个策略", "err"); return; }
+  try {
+    await call("/settings", {
+      method: "POST",
+      body: JSON.stringify({
+        strategy: picked.value,
+        retry_on_failure: $("retryOnFailure").checked,
+      }),
+    });
+    showMsg($("routingMsg"), "路由设置已保存并生效", "ok");
+    await loadSettings();
+    await loadStatus();
+  } catch (e) {
+    showMsg($("routingMsg"), e.message, "err");
+  }
+});
+$("reloadRouting").addEventListener("click", () => loadSettings());
+
+function renderGlobalModels(models, disabled) {
+  const off = new Set((disabled || []).map((m) => m.toLowerCase()));
+  $("globalModels").innerHTML = models.map((m) => {
+    const id = typeof m === "string" ? m : m.id;
+    const isOff = off.has(String(id).toLowerCase());
+    return `<span class="mchip ${isOff ? "" : "on"}" data-model="${escapeHTML(id)}"
+              title="${isOff ? "已全局禁用，点击启用" : "点击全局禁用"}">${escapeHTML(id)}</span>`;
+  }).join("") || '<span style="color:var(--muted);font-size:12px">暂无模型</span>';
+}
+
+$("globalModels").addEventListener("click", async () => {
+  const chip = event.target.closest(".mchip");
+  if (!chip) return;
+  const model = chip.dataset.model.toLowerCase();
+  const current = ((settingsCache && settingsCache.settings) || {}).disabled_models || [];
+  const off = new Set(current.map((m) => m.toLowerCase()));
+  if (off.has(model)) off.delete(model); else off.add(model);
+  try {
+    await call("/settings", { method: "POST", body: JSON.stringify({ disabled_models: [...off] }) });
+    await Promise.all([loadSettings(), loadModels()]);
+  } catch (e) {
+    showMsg($("globalMsg"), e.message, "err");
+  }
+});
+
+$("saveSettings").addEventListener("click", async () => {
+  try {
+    await call("/settings", {
+      method: "POST",
+      body: JSON.stringify({
+        log_retention: parseInt($("sLogRetention").value, 10) || 300,
+        request_timeout_seconds: parseInt($("sTimeout").value, 10) || 600,
+        base_url: $("sBase").value.trim(),
+        include_stream_usage: $("sStreamUsage").checked,
+      }),
+    });
+    showMsg($("settingsMsg"), "设置已保存", "ok");
+    await loadSettings();
+    await loadLogs();
+  } catch (e) {
+    showMsg($("settingsMsg"), e.message, "err");
+  }
+});
+$("reloadSettings").addEventListener("click", () => loadSettings());
+
+/* ---------- models ---------- */
 
 async function loadModels() {
   try {
@@ -450,107 +994,8 @@ async function loadModels() {
   }
 }
 
-async function loadUsage() {
-  try {
-    const data = await call("/usage");
-    const t = data.totals || {};
-    $("totals").innerHTML = `
-      <div class="stat"><div class="k">请求</div><div class="v">${fmtNum(t.requests)}</div></div>
-      <div class="stat"><div class="k">输入</div><div class="v">${fmtNum(t.input_tokens)}</div></div>
-      <div class="stat"><div class="k">缓存</div><div class="v">${fmtNum(t.cached_tokens)}</div></div>
-      <div class="stat"><div class="k">输出</div><div class="v">${fmtNum(t.output_tokens)}</div></div>
-      <div class="stat"><div class="k">成本</div><div class="v">${fmtCost(t.cost_usd)}</div></div>`;
-  } catch (e) { /* keep the previous totals */ }
-}
+/* ---------- lock ---------- */
 
-async function loadLogs() {
-  try {
-    const data = await call("/logs");
-    const logs = (data.logs || []).slice().reverse();
-    if (!logs.length) { $("logs").textContent = "暂无日志"; return; }
-    $("logs").textContent = logs.map((l) => {
-      const parts = [l.time ? l.time.replace("T", " ").slice(0, 19) : ""];
-      if (l.level) parts.push(l.level.toUpperCase());
-      if (l.status) parts.push("[" + l.status + "]");
-      if (l.model) parts.push(l.model);
-      if (l.ms) parts.push(l.ms + "ms");
-      if (l.detail) parts.push(l.detail);
-      return parts.filter(Boolean).join(" ");
-    }).join("\n");
-  } catch (e) { $("logs").textContent = e.message; }
-}
-
-async function refreshAll() {
-  await Promise.all([loadStatus(), loadCreds(), loadModels(), loadUsage(), loadLogs()]);
-}
-
-$("addBtn").addEventListener("click", async () => {
-  const btn = $("addBtn");
-  const key = $("key").value.trim();
-  const label = $("label").value.trim();
-  const base = $("base").value.trim();
-  if (!key) { showMsg($("addMsg"), "请填写 API Key", "err"); return; }
-  btn.disabled = true;
-  showMsg($("addMsg"), "正在向上游验证…", "info");
-  try {
-    const res = await call("/credentials", {
-      method: "POST",
-      body: JSON.stringify({ api_key: key, label: label, base_url: base }),
-    });
-    showMsg($("addMsg"), `添加成功，发现 ${res.count} 个模型`, "ok");
-    $("key").value = "";
-    $("label").value = "";
-    await refreshAll();
-  } catch (e) {
-    showMsg($("addMsg"), e.message, "err");
-  } finally {
-    btn.disabled = false;
-  }
-});
-
-$("creds").addEventListener("click", async (ev) => {
-  const btn = ev.target.closest("button[data-act]");
-  if (!btn) return;
-  const act = btn.dataset.act;
-  const id = btn.dataset.id;
-  btn.disabled = true;
-  try {
-    if (act === "delete") {
-      if (!confirm("删除这个账号？对应的 auth 文件也会被移除。")) return;
-      await call("/credentials?id=" + encodeURIComponent(id), { method: "DELETE" });
-    } else if (act === "test") {
-      const res = await call("/credentials/test", {
-        method: "POST", body: JSON.stringify({ id }),
-      });
-      alert("验证通过，可访问 " + res.count + " 个模型");
-    } else if (act === "refresh") {
-      await call("/models/refresh", {
-        method: "POST", body: JSON.stringify({ id }),
-      });
-    }
-    await refreshAll();
-  } catch (e) {
-    alert(e.message);
-  } finally {
-    btn.disabled = false;
-  }
-});
-
-$("refreshBtn").addEventListener("click", async () => {
-  try {
-    await call("/models/refresh", { method: "POST", body: "{}" });
-    await refreshAll();
-  } catch (e) { alert(e.message); }
-});
-
-$("reloadBtn").addEventListener("click", refreshAll);
-
-$("clearLogs").addEventListener("click", async () => {
-  try { await call("/logs/clear", { method: "POST" }); await loadLogs(); }
-  catch (e) { alert(e.message); }
-});
-
-// lockConsole blocks the page until a management key is supplied.
 function lockConsole() {
   const box = $("lock");
   if (box.style.display === "grid") return;
@@ -573,8 +1018,18 @@ async function unlockConsole() {
   await refreshAll();
 }
 
+/* ---------- boot ---------- */
+
+async function refreshAll() {
+  await loadStatus();
+  await (LOADERS[activeTab] || (() => {}))();
+}
+
+setInterval(() => {
+  if (activeTab === "logs" && $("autoRefresh").checked) loadLogs();
+}, 10000);
+
 refreshAll();
-setInterval(() => { loadUsage(); loadLogs(); }, 15000);
 </script>
 </body>
 </html>

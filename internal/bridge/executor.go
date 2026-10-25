@@ -335,6 +335,18 @@ func (s *Service) prepareUpstream(c Credential, r executorRequest) (string, []by
 	if !ok {
 		return "", nil, fail(400, "unknown River model: "+r.Model)
 	}
+	// A model switched off for this key must not be served by it. The host
+	// already filters the advertised list, but a client can still name the
+	// model directly, and the scheduler may have routed here before the
+	// per-key list was refreshed.
+	if c.Disabled {
+		return "", nil, failCode(403, "river_key_disabled",
+			"this River key is disabled in RiverBridge")
+	}
+	if isModelBlocked(s.config(), c, r.Model) {
+		return "", nil, failCode(403, "river_model_disabled",
+			"River model "+r.Model+" is disabled in RiverBridge")
+	}
 	body := r.Payload
 	if len(body) == 0 {
 		body = r.OriginalRequest
@@ -526,6 +538,10 @@ func (s *Service) recordSuccess(credID, model, upstream string, usage *Usage) {
 	if store != nil {
 		store.RecordSuccess(credID, model, usage)
 	}
+	// A success clears any cooldown: the key is demonstrably good again.
+	if s.cooldown != nil && credID != "" {
+		s.cooldown.clear(credID)
+	}
 }
 
 // recordFailure books a failed request against the credential.
@@ -535,5 +551,11 @@ func (s *Service) recordFailure(credID, model, message string) {
 	s.mu.RUnlock()
 	if store != nil && credID != "" {
 		store.RecordFailure(credID, model, message)
+	}
+	// Park the key briefly so the next request prefers another one. This only
+	// matters while retry_on_failure is on; the scheduler ignores cooldowns
+	// otherwise.
+	if s.cooldown != nil && credID != "" && s.config().RetryOnFailure {
+		s.cooldown.mark(credID)
 	}
 }

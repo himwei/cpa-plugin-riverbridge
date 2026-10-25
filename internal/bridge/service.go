@@ -29,19 +29,29 @@ type Service struct {
 
 	logs  *logRing
 	usage *usageStore
+
+	// rr and cooldown drive auth selection in pickAuth.
+	rr       *roundRobin
+	cooldown *cooldowns
+
+	// schedPicks counts scheduler.pick calls; see markSchedulerActive.
+	schedPicks     int64
+	schedFirstPick string
 }
 
 // NewService builds an unconfigured service. The host calls plugin.register
 // before anything else.
 func NewService() *Service {
 	return &Service{
-		cfg:     defaultConfig(),
-		creds:   map[string]Credential{},
-		files:   map[string]string{},
-		revoked: map[string]bool{},
-		started: time.Now(),
-		logs:    newLogRing(defaultConfig().LogRetention),
-		usage:   newUsageStore(),
+		cfg:      defaultConfig(),
+		creds:    map[string]Credential{},
+		files:    map[string]string{},
+		revoked:  map[string]bool{},
+		started:  time.Now(),
+		logs:     newLogRing(defaultConfig().LogRetention),
+		usage:    newUsageStore(),
+		rr:       newRoundRobin(),
+		cooldown: newCooldowns(90 * time.Second),
 	}
 }
 
@@ -101,6 +111,8 @@ func (s *Service) Handle(method string, raw json.RawMessage) (any, error) {
 		return s.execute(raw)
 	case "executor.execute_stream":
 		return s.executeStream(raw)
+	case "scheduler.pick":
+		return s.pickAuth(raw)
 	case "executor.count_tokens":
 		// A missing count endpoint is availability-neutral for the host; 404
 		// keeps a healthy credential from being cooled down.
@@ -199,9 +211,13 @@ func registration() any {
 			},
 		},
 		"capabilities": map[string]any{
-			"auth_provider":           true,
-			"model_provider":          true,
-			"executor":                true,
+			"auth_provider":  true,
+			"model_provider": true,
+			"executor":       true,
+			// scheduler makes the plugin's pickAuth the auth chooser for routes
+			// that involve River. The host uses the first registered scheduler,
+			// so this only takes effect while no other plugin claims it.
+			"scheduler":               true,
 			"executor_model_scope":    "oauth",
 			"executor_input_formats":  []string{"chat-completions"},
 			"executor_output_formats": []string{"chat-completions"},

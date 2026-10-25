@@ -17,13 +17,15 @@ const apiBase = "/v0/management/" + PluginID
 // registerManagement declares the console route plus the JSON API.
 func (s *Service) registerManagement(raw json.RawMessage) (any, error) {
 	routes := []map[string]string{}
-	for _, p := range []string{"status", "credentials", "models", "logs", "usage"} {
+	for _, p := range []string{"status", "credentials", "models", "logs", "logs/export", "usage", "settings"} {
 		routes = append(routes, map[string]string{"Method": "GET", "Path": apiBase + "/" + p})
 	}
-	for _, p := range []string{"credentials", "credentials/test", "models/refresh", "usage/reset", "logs/clear"} {
+	for _, p := range []string{"credentials", "credentials/test", "credentials/model",
+		"models/refresh", "usage/reset", "logs/clear", "settings"} {
 		routes = append(routes, map[string]string{"Method": "POST", "Path": apiBase + "/" + p})
 	}
 	for _, p := range []string{"credentials"} {
+		routes = append(routes, map[string]string{"Method": "PATCH", "Path": apiBase + "/" + p})
 		routes = append(routes, map[string]string{"Method": "PUT", "Path": apiBase + "/" + p})
 	}
 	routes = append(routes, map[string]string{"Method": "DELETE", "Path": apiBase + "/credentials"})
@@ -32,7 +34,7 @@ func (s *Service) registerManagement(raw json.RawMessage) (any, error) {
 		"resources": []map[string]string{{
 			"Path":        "/console",
 			"Menu":        "RiverBridge",
-			"Description": "River API keys, river- models and token usage",
+			"Description": "River API keys, river- models, routing strategy and token usage",
 		}},
 	}, nil
 }
@@ -70,6 +72,10 @@ func (s *Service) handleManagement(raw json.RawMessage) (any, error) {
 		return s.managementCredentials()
 	case "POST /credentials", "PUT /credentials":
 		return s.managementAddCredential(r.Body)
+	case "PATCH /credentials":
+		return s.managementPatchCredential(r.Body)
+	case "POST /credentials/model":
+		return s.managementSetModelState(r.Body)
 	case "DELETE /credentials":
 		return s.managementDeleteCredential(r.Query)
 	case "POST /credentials/test":
@@ -79,7 +85,9 @@ func (s *Service) handleManagement(raw json.RawMessage) (any, error) {
 	case "POST /models/refresh":
 		return s.managementRefreshModels(r.Body)
 	case "GET /logs":
-		return s.managementLogs()
+		return s.managementLogsQuery(r.Method, r.Query)
+	case "GET /logs/export":
+		return s.managementExportLogs()
 	case "POST /logs/clear":
 		s.mu.RLock()
 		logs := s.logs
@@ -92,6 +100,10 @@ func (s *Service) handleManagement(raw json.RawMessage) (any, error) {
 		return s.managementUsage()
 	case "POST /usage/reset":
 		return s.managementResetUsage(r.Body)
+	case "GET /settings":
+		return s.managementSettings()
+	case "POST /settings":
+		return s.managementSaveSettings(r.Body)
 	}
 	return managementJSON(http.StatusNotFound, map[string]string{"error": "unknown route: " + r.Method + " " + p})
 }
@@ -137,23 +149,28 @@ func (s *Service) managementStatus() (any, error) {
 		"credentials":  count,
 		"models":       len(catalogueModels()),
 		"uptime_s":     int64(time.Since(s.started).Seconds()),
+		"strategy":     cfg.Strategy,
+		"scheduler":    s.schedulerState(),
 	})
 }
 
 // credentialView is one card in the console.
 type credentialView struct {
-	ID           string            `json:"id"`
-	Label        string            `json:"label"`
-	FileName     string            `json:"file_name"`
-	APIKeyMasked string            `json:"api_key_masked"`
-	BaseURL      string            `json:"base_url"`
-	Disabled     bool              `json:"disabled"`
-	ModelCount   int               `json:"model_count"`
-	Models       []DiscoveredModel `json:"models"`
-	CreatedAt    string            `json:"created_at"`
-	UpdatedAt    string            `json:"updated_at"`
-	Usage        usageStat         `json:"usage"`
-	LastError    string            `json:"last_error,omitempty"`
+	ID             string            `json:"id"`
+	Remark         string            `json:"remark"`
+	Label          string            `json:"label"`
+	FileName       string            `json:"file_name"`
+	APIKeyMasked   string            `json:"api_key_masked"`
+	BaseURL        string            `json:"base_url"`
+	Disabled       bool              `json:"disabled"`
+	Priority       int               `json:"priority"`
+	DisabledModels []string          `json:"disabled_models"`
+	ModelCount     int               `json:"model_count"`
+	Models         []DiscoveredModel `json:"models"`
+	CreatedAt      string            `json:"created_at"`
+	UpdatedAt      string            `json:"updated_at"`
+	Usage          usageStat         `json:"usage"`
+	LastError      string            `json:"last_error,omitempty"`
 }
 
 func (s *Service) managementCredentials() (any, error) {
@@ -174,20 +191,24 @@ func (s *Service) managementCredentials() (any, error) {
 		stats = store.Snapshot()
 	}
 
+	cfg := s.config()
 	views := make([]credentialView, 0, len(creds))
 	for _, c := range creds {
 		views = append(views, credentialView{
-			ID:           c.ID,
-			Label:        labelOf(c),
-			FileName:     files[c.ID],
-			APIKeyMasked: maskKey(c.APIKey),
-			BaseURL:      c.BaseURLOrDefault(),
-			Disabled:     c.Disabled,
-			ModelCount:   len(c.Models),
-			Models:       c.Models,
-			CreatedAt:    c.CreatedAt,
-			UpdatedAt:    c.UpdatedAt,
-			Usage:        stats[c.ID],
+			ID:             c.ID,
+			Remark:         c.Remark,
+			Label:          labelOf(c),
+			FileName:       files[c.ID],
+			APIKeyMasked:   maskKey(c.APIKey),
+			BaseURL:        c.BaseURLOrDefault(),
+			Disabled:       c.Disabled,
+			Priority:       c.Priority,
+			DisabledModels: nonNilStrings(c.DisabledModels),
+			ModelCount:     len(c.AdvertisedModels(cfg)),
+			Models:         c.AdvertisedModels(cfg),
+			CreatedAt:      c.CreatedAt,
+			UpdatedAt:      c.UpdatedAt,
+			Usage:          stats[c.ID],
 		})
 	}
 	sort.Slice(views, func(i, j int) bool { return views[i].ID < views[j].ID })
@@ -200,6 +221,7 @@ func (s *Service) managementAddCredential(body []byte) (any, error) {
 	var req struct {
 		APIKey  string `json:"api_key"`
 		Label   string `json:"label"`
+		Remark  string `json:"remark"`
 		BaseURL string `json:"base_url"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -231,6 +253,7 @@ func (s *Service) managementAddCredential(body []byte) (any, error) {
 	if label == "" {
 		label = id
 	}
+	remark := strings.TrimSpace(req.Remark)
 	stamp := nowStamp()
 
 	s.mu.RLock()
@@ -242,6 +265,7 @@ func (s *Service) managementAddCredential(body []byte) (any, error) {
 		Type:          Provider,
 		ID:            id,
 		Label:         label,
+		Remark:        remark,
 		APIKey:        key,
 		BaseURL:       strings.TrimSpace(req.BaseURL),
 		Models:        models,
@@ -482,17 +506,6 @@ func (s *Service) managementRefreshModels(body []byte) (any, error) {
 	}
 	s.refreshHostModels()
 	return managementJSON(http.StatusOK, map[string]any{"results": results})
-}
-
-func (s *Service) managementLogs() (any, error) {
-	s.mu.RLock()
-	logs := s.logs
-	s.mu.RUnlock()
-	entries := []logEntry{}
-	if logs != nil {
-		entries = logs.snapshot()
-	}
-	return managementJSON(http.StatusOK, map[string]any{"logs": entries, "count": len(entries)})
 }
 
 func (s *Service) managementUsage() (any, error) {

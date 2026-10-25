@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -45,12 +46,9 @@ func authData(c Credential, filename string) map[string]any {
 	}
 }
 
-func labelOf(c Credential) string {
-	if strings.TrimSpace(c.Label) != "" {
-		return c.Label
-	}
-	return c.ID
-}
+// labelOf is the name shown to the host, which the console mirrors. Remark
+// wins over the labels written by 0.1.0.
+func labelOf(c Credential) string { return c.DisplayName() }
 
 // CredentialID derives a stable id from the key itself so re-adding the same
 // key maps onto the same auth record instead of creating a duplicate.
@@ -196,7 +194,10 @@ func (s *Service) modelsForAuth(raw json.RawMessage) (any, error) {
 		// list is never empty for a freshly added key.
 		c.Models = catalogueModels()
 	}
-	return modelRegistration(c.Models), nil
+	// Advertise only what the operator left enabled for this key, so a
+	// switched-off model disappears from /v1/models instead of failing later.
+	// The same helper feeds the revision hash, keeping both in one place.
+	return modelRegistration(c.AdvertisedModels(s.config())), nil
 }
 
 // modelRegistration builds the host model payload.
@@ -327,6 +328,15 @@ func (s *Service) log(level, model, authID string, status int, ms int64, detail 
 		Millis: ms,
 		Detail: detail,
 	})
+}
+
+// debugf mirrors one line to both the plugin log ring and CPA's own log, which
+// is where the host-side writes become visible.
+func (s *Service) debugf(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	s.log("debug", "", "", 0, 0, msg)
+	var out struct{}
+	_ = s.call("host.log", map[string]any{"level": "debug", "message": "riverbridge: " + msg}, &out)
 }
 
 // contextWithTimeout is a small helper so every upstream call shares one policy.
