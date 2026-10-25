@@ -146,6 +146,16 @@ tr.lvl-error td { color: var(--err); }
 .msg.ok { background: color-mix(in srgb, var(--ok) 12%, transparent); color: var(--ok); }
 .msg.err { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); }
 .msg.info { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+/* Priority and budget sit on the card: they are per-account knobs an operator
+   tunes while looking at that account's numbers, not a modal away. */
+.tuners {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+  margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line);
+}
+.tuner { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+.tuner input { width: 72px; padding: 4px 8px; font-size: 12.5px; }
+.spendline { display: inline-flex; gap: 10px; font-size: 11.5px; color: var(--muted); }
+.spendline b { color: var(--text); }
 .empty { color: var(--muted); font-size: 13px; padding: 22px; text-align: center; line-height: 1.7; }
 .empty a { color: var(--accent); text-decoration: none; }
 .empty a:hover { text-decoration: underline; }
@@ -991,6 +1001,14 @@ async function loadCreds() {
   }
 }
 
+/* budgetText describes the ceiling in the terms the operator set it: an
+   unset ceiling reads "不限" rather than "$0", because zero is not a limit. */
+function budgetText(c) {
+  if (!c.balance_usd) return '<span style="color:var(--muted)">不限额度</span>';
+  if (c.exhausted) return '<span style="color:var(--err)">额度已用尽 · 已移出轮换</span>';
+  return `<span>剩余 ${fmtCost(c.remaining_usd)} / ${fmtCost(c.balance_usd)}</span>`;
+}
+
 function renderCred(c) {
   const u = c.usage || {};
   const disabledModels = new Set((c.disabled_models || []).map((m) => m.toLowerCase()));
@@ -1029,7 +1047,25 @@ function renderCred(c) {
     </div>
     <div class="meta">
       <span>可用 ${c.model_count} / ${(c.models || []).length} 个模型</span>
-      ${c.priority ? `<span>优先级 <code>${c.priority}</code></span>` : ""}
+    </div>
+    <div class="tuners">
+      <label class="tuner">
+        <span>优先级</span>
+        <input type="number" step="1" data-tune="priority" data-id="${escapeHTML(c.id)}"
+               value="${c.priority || 0}" title="固定优先时数值大的先用">
+      </label>
+      <label class="tuner">
+        <span>额度上限 ($)</span>
+        <input type="number" step="1" min="0" data-tune="balance" data-id="${escapeHTML(c.id)}"
+               value="${c.balance_usd ? c.balance_usd : 0}" title="0 表示不限">
+      </label>
+      <div class="spendline">
+        <span>已用 ${fmtCost(c.spent_usd)}</span>
+        ${budgetText(c)}
+      </div>
+      <div class="spacer"></div>
+      <button class="sm primary" data-act="saveTuners" data-id="${escapeHTML(c.id)}">保存优先级与额度</button>
+      ${c.spent_usd ? `<button class="sm" data-act="resetSpent" data-id="${escapeHTML(c.id)}">重置已用</button>` : ""}
     </div>
     <div class="modellist" data-list="${escapeHTML(c.id)}">${
       chips || '<span style="color:var(--muted);font-size:12px">暂无模型</span>'}</div>
@@ -1098,6 +1134,15 @@ $("creds").addEventListener("click", async (ev) => {
       await patchCredential({ id: id, disabled_models: off });
       await Promise.all([loadCreds(), loadModels()]);
     } else if (act === "resetModels") {
+      await loadCreds();
+    } else if (act === "saveTuners") {
+      const prio = Number(document.querySelector(`[data-tune="priority"][data-id="${CSS.escape(id)}"]`).value) || 0;
+      const budget = Number(document.querySelector(`[data-tune="balance"][data-id="${CSS.escape(id)}"]`).value) || 0;
+      await patchCredential({ id: id, priority: prio, balance_usd: budget });
+      await loadCreds();
+    } else if (act === "resetSpent") {
+      if (!confirm("充值后重置「已用」？额度上限保持不变。")) return;
+      await call("/credentials/spent/reset", { method: "POST", body: JSON.stringify({ id }) });
       await loadCreds();
     } else if (act === "rename") {
       const cred = credCache.find((c) => c.id === id);

@@ -87,6 +87,14 @@ func (s *Service) parseAuth(raw json.RawMessage) (any, error) {
 	if strings.TrimSpace(c.APIKey) == "" {
 		return nil, fail(401, "River credential has no api_key")
 	}
+	// The auth file never carries the budget counters; they live in our own
+	// store, and the host re-parses this file on every request.
+	if c.ID == "" && req.FileName != "" {
+		c.ID = strings.TrimSuffix(req.FileName, ".json")
+	}
+	if c.ID != "" {
+		c = s.mergeSpend(c)
+	}
 	if c.ID == "" {
 		if req.FileName != "" {
 			c.ID = strings.TrimSuffix(req.FileName, ".json")

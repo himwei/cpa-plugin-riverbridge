@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -21,7 +22,8 @@ func (s *Service) registerManagement(raw json.RawMessage) (any, error) {
 		routes = append(routes, map[string]string{"Method": "GET", "Path": apiBase + "/" + p})
 	}
 	for _, p := range []string{"credentials", "credentials/test", "credentials/model",
-		"models/refresh", "usage/reset", "logs/clear", "settings", "statistics/reset"} {
+		"credentials/spent/reset", "models/refresh", "usage/reset", "logs/clear",
+		"settings", "statistics/reset"} {
 		routes = append(routes, map[string]string{"Method": "POST", "Path": apiBase + "/" + p})
 	}
 	for _, p := range []string{"credentials"} {
@@ -76,6 +78,8 @@ func (s *Service) handleManagement(raw json.RawMessage) (any, error) {
 		return s.managementPatchCredential(r.Body)
 	case "POST /credentials/model":
 		return s.managementSetModelState(r.Body)
+	case "POST /credentials/spent/reset":
+		return s.managementResetSpent(r.Body)
 	case "DELETE /credentials":
 		return s.managementDeleteCredential(r.Query)
 	case "POST /credentials/test":
@@ -158,6 +162,11 @@ func (s *Service) managementStatus() (any, error) {
 	})
 }
 
+// round6 trims float noise from money accumulated as float64 cents.
+func round6(v float64) float64 {
+	return math.Round(v*1e6) / 1e6
+}
+
 // credentialView is one card in the console.
 type credentialView struct {
 	ID             string            `json:"id"`
@@ -168,6 +177,10 @@ type credentialView struct {
 	BaseURL        string            `json:"base_url"`
 	Disabled       bool              `json:"disabled"`
 	Priority       int               `json:"priority"`
+	BalanceUSD     float64           `json:"balance_usd"`
+	SpentUSD       float64           `json:"spent_usd"`
+	RemainingUSD   float64           `json:"remaining_usd"`
+	Exhausted      bool              `json:"exhausted"`
 	DisabledModels []string          `json:"disabled_models"`
 	ModelCount     int               `json:"model_count"`
 	Models         []DiscoveredModel `json:"models"`
@@ -207,6 +220,10 @@ func (s *Service) managementCredentials() (any, error) {
 			BaseURL:        c.BaseURLOrDefault(),
 			Disabled:       c.Disabled,
 			Priority:       c.Priority,
+			BalanceUSD:     c.BalanceUSD,
+			SpentUSD:       round6(c.SpentUSD),
+			RemainingUSD:   round6(c.RemainingUSD()),
+			Exhausted:      c.Exhausted(),
 			DisabledModels: nonNilStrings(c.DisabledModels),
 			// Models stays the full list on purpose: the console draws one
 			// chip per model and needs the disabled ones back in order to

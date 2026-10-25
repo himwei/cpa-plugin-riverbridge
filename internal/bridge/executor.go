@@ -93,6 +93,10 @@ func (s *Service) credentialFrom(r executorRequest) (Credential, error) {
 	if c.APIKey == "" {
 		return c, fail(401, "River credential has no api_key")
 	}
+	// The host hands us its own snapshot of the auth file, which never carries
+	// the budget counters. Without this the exhausted check below would always
+	// see zero and a spent-out key would keep serving.
+	c = s.mergeSpend(c)
 	s.mu.RLock()
 	if current, ok := s.creds[c.ID]; ok && current.APIKey == c.APIKey {
 		// Local edits (label, models) win over a stale host snapshot.
@@ -401,6 +405,14 @@ func (s *Service) prepareUpstream(c Credential, r executorRequest) (string, []by
 		return "", nil, failCode(403, "river_key_disabled",
 			"this River key is disabled in RiverBridge")
 	}
+	// No 403 for an exhausted key here. Refusing at dispatch works, but CPA
+	// remembers the failure against that auth and keeps skipping it afterwards,
+	// so the key stays dark even once the budget is topped up again. A spent-out
+	// key is instead taken out of rotation by addSpend/setSpend, which is
+	// reversible; this check only catches a request already in flight.
+	if c.Exhausted() {
+		return "", nil, fail(429, "this River key has spent its budget in RiverBridge")
+	}
 	if isModelBlocked(s.config(), c, r.Model) {
 		return "", nil, failCode(403, "river_model_disabled",
 			"River model "+r.Model+" is disabled in RiverBridge")
@@ -620,6 +632,13 @@ func (s *Service) recordSuccess(credID, model, upstream string, usage *Usage) {
 	s.mu.RUnlock()
 	if store != nil {
 		store.RecordSuccess(credID, model, usage)
+	}
+	// Charge the spend against the key's budget. Kept in the plugin's own store
+	// and saved on the flush timer: a write per request would put a disk sync
+	// on the hot path, and the auth file is unreadable for this purpose since
+	// the host re-parses it and resets whatever we put there.
+	if usage != nil && credID != "" {
+		s.addSpend(credID, usage.CostUSD)
 	}
 	// A success clears any cooldown: the key is demonstrably good again.
 	if s.cooldown != nil && credID != "" {

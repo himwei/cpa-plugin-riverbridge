@@ -100,6 +100,19 @@ type Credential struct {
 	DisabledModels []string `json:"disabled_models"`
 	// Priority biases both fill-first and round-robin ordering: higher wins.
 	Priority int `json:"priority,omitempty"`
+	// BalanceUSD is what this key may still spend, in US dollars. Zero means
+	// "no ceiling" rather than "nothing left": a key with no budget set must
+	// keep working, and a spent-out key is expressed by SpentUSD reaching a
+	// non-zero limit instead.
+	//
+	// River publishes no balance endpoint (every candidate path answers 200
+	// with an empty body, including ones that cannot exist), so spending has
+	// to be accumulated locally from the prices the plugin already bills with.
+	BalanceUSD float64 `json:"-"`
+	// SpentUSD is the running total this plugin has charged against the key.
+	// It lives in the credential because the auth file is the only state the
+	// host persists for us; usage.json would be lost on re-import.
+	SpentUSD float64 `json:"-"`
 
 	// Models caches what this key can actually reach upstream. It is refreshed
 	// when the key is added and by the management API on demand.
@@ -111,6 +124,24 @@ type Credential struct {
 
 	CreatedAt string `json:"created_at,omitempty"`
 	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+// Exhausted reports whether the key has spent its budget. A zero BalanceUSD
+// means no ceiling was set, not "nothing left", so an unbudgeted key is never
+// exhausted and keeps serving.
+func (c Credential) Exhausted() bool {
+	return c.BalanceUSD > 0 && c.SpentUSD >= c.BalanceUSD
+}
+
+// RemainingUSD is what is left before the ceiling, or -1 when none is set.
+func (c Credential) RemainingUSD() float64 {
+	if c.BalanceUSD <= 0 {
+		return -1
+	}
+	if left := c.BalanceUSD - c.SpentUSD; left > 0 {
+		return left
+	}
+	return 0
 }
 
 // DisplayName is the operator-facing name for a credential.

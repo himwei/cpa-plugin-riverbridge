@@ -44,6 +44,11 @@ type Service struct {
 	// stopFlush closes the background persistence loop on shutdown.
 	stopFlush chan struct{}
 	flushOnce sync.Once
+	// spent holds budgets and running spend in the plugin's own data dir. It
+	// must not live in the auth file: the host re-parses that file on every
+	// request and rebuilds the credential from it, which would reset a counter
+	// written there.
+	spent *spendStore
 }
 
 // NewService builds an unconfigured service. The host calls plugin.register
@@ -122,6 +127,177 @@ func (s *Service) flushCounters() {
 	if stats != nil {
 		stats.flush()
 	}
+	s.flushSpent()
+}
+
+// flushSpent persists the budget counters. Failures are logged and retried on
+// the next tick rather than surfaced to a request.
+func (s *Service) flushSpent() {
+	s.mu.RLock()
+	spent := s.spent
+	s.mu.RUnlock()
+	if spent == nil {
+		return
+	}
+	if err := spent.save(); err != nil {
+		s.log("warn", "", "", 0, 0, "saving spend counters failed: "+err.Error())
+	}
+}
+
+// mergeSpend layers the plugin's budget numbers onto a credential decoded from
+// the auth file. The file never carries them, so they always come from here.
+func (s *Service) mergeSpend(c Credential) Credential {
+	s.mu.RLock()
+	spent := s.spent
+	s.mu.RUnlock()
+	if spent == nil {
+		return c
+	}
+	r := spent.get(c.ID)
+	c.BalanceUSD = r.BudgetUSD
+	c.SpentUSD = r.SpentUSD
+	return c
+}
+
+// setSpend records a new budget for one key and keeps the cached credential in
+// step so the console reflects it without waiting for a re-parse.
+func (s *Service) setSpend(id string, budget float64) {
+	s.mu.RLock()
+	spent := s.spent
+	s.mu.RUnlock()
+	var r spendRecord
+	if spent != nil {
+		r = spent.get(id)
+		r.BudgetUSD = budget
+		spent.set(id, r)
+		_ = spent.save()
+	}
+	s.mu.Lock()
+	if c, ok := s.creds[id]; ok {
+		c.BalanceUSD = budget
+		s.creds[id] = c
+	}
+	s.mu.Unlock()
+
+	// Lowering the ceiling below what is already spent has to take effect
+	// immediately. Waiting for the next request would leave the key serving
+	// traffic that the operator has just said it may not spend.
+	if spent != nil && budget > 0 && r.SpentUSD >= budget {
+		r.AutoDisabled = true
+		spent.set(id, r)
+		_ = spent.save()
+		s.setDisabled(id, true)
+		s.log("warn", "", id, 0, 0, "budget already reached; key taken out of rotation")
+	}
+}
+
+// addSpend charges a successful call against a key's running total and takes
+// the key out of service once the ceiling is reached.
+func (s *Service) addSpend(id string, cost float64) {
+	if id == "" || cost <= 0 {
+		return
+	}
+	s.mu.RLock()
+	spent := s.spent
+	s.mu.RUnlock()
+	if spent == nil {
+		return
+	}
+	r := spent.get(id)
+	r.SpentUSD += cost
+	spent.set(id, r)
+	// Written through immediately. Unlike the diagnostic log, this number is
+	// money: dropping the last few seconds of it on a restart is not an
+	// acceptable trade for saving one small write per request.
+	if err := spent.save(); err != nil {
+		s.log("warn", "", id, 0, 0, "saving spend failed: "+err.Error())
+	}
+
+	s.mu.Lock()
+	c, ok := s.creds[id]
+	if ok {
+		c.SpentUSD = r.SpentUSD
+		s.creds[id] = c
+	}
+	disableNow := ok && r.BudgetUSD > 0 && r.SpentUSD >= r.BudgetUSD && !c.Disabled
+	s.mu.Unlock()
+
+	// Removing the key from the pool is the only lever that actually stops
+	// traffic. Answering 403 at execution time also works, but CPA remembers
+	// the failure against that auth and keeps skipping it afterwards -- the key
+	// stays unusable even once the budget is topped up again.
+	if disableNow {
+		r.AutoDisabled = true
+		spent.set(id, r)
+		_ = spent.save()
+		s.setDisabled(id, true)
+		s.log("warn", "", id, 0, 0, "budget reached; key taken out of rotation")
+	}
+}
+
+// setDisabled flips a credential's disabled flag, persists it and re-registers
+// the model list so the host stops advertising it.
+func (s *Service) setDisabled(id string, disabled bool) {
+	s.mu.Lock()
+	c, ok := s.creds[id]
+	fileName := s.files[id]
+	dir := s.authDir
+	if !ok || c.Disabled == disabled {
+		s.mu.Unlock()
+		return
+	}
+	c.Disabled = disabled
+	c.ModelRevision = revisionOf(c.AdvertisedModels(s.cfg))
+	c.UpdatedAt = nowStamp()
+	s.creds[id] = c
+	s.mu.Unlock()
+
+	if err := s.persistCredential(c, dir, fileName); err != nil {
+		s.log("error", "", id, 0, 0, "persist budget disable: "+err.Error())
+		return
+	}
+	s.refreshHostModels()
+}
+
+// clearAutoDisable re-enables a key this plugin switched off, and only such a
+// key: a deliberate operator disable must survive a budget change.
+func (s *Service) clearAutoDisable(id string) {
+	s.mu.RLock()
+	spent := s.spent
+	s.mu.RUnlock()
+	if spent == nil {
+		return
+	}
+	r := spent.get(id)
+	if !r.AutoDisabled || r.SpentUSD >= r.BudgetUSD && r.BudgetUSD > 0 {
+		return
+	}
+	r.AutoDisabled = false
+	spent.set(id, r)
+	_ = spent.save()
+	s.setDisabled(id, false)
+	s.log("info", "", id, 0, 0, "budget available again; key returned to rotation")
+}
+
+// resetSpend clears the running total after a top-up, keeping the ceiling.
+func (s *Service) resetSpend(id string) {
+	s.mu.RLock()
+	spent := s.spent
+	s.mu.RUnlock()
+	if spent == nil {
+		return
+	}
+	r := spent.get(id)
+	r.SpentUSD = 0
+	r.AutoDisabled = false
+	spent.set(id, r)
+	_ = spent.save()
+	s.mu.Lock()
+	if c, ok := s.creds[id]; ok {
+		c.SpentUSD = 0
+		s.creds[id] = c
+	}
+	s.mu.Unlock()
 }
 
 func (s *Service) stopFlushLoop() {
@@ -232,6 +408,7 @@ func (s *Service) configure(raw json.RawMessage) error {
 	// data_dir is honoured; the ring replays the journal into memory here.
 	s.mu.Lock()
 	s.logs = newLogRing(cfg.DataDir, cfg.LogRetention)
+	s.spent = newSpendStore(cfg.DataDir)
 	s.mu.Unlock()
 
 	s.mu.RLock()

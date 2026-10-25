@@ -126,6 +126,9 @@ func (s *Service) pickAuth(raw json.RawMessage) (any, error) {
 		if known && c.Disabled {
 			continue
 		}
+		if known && c.Exhausted() {
+			continue
+		}
 		if model != "" && isModelBlocked(cfg, c, model) {
 			continue
 		}

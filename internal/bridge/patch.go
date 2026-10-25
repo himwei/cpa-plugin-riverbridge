@@ -2,9 +2,11 @@ package bridge
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -16,6 +18,7 @@ type patchRequest struct {
 	Remark     *string   `json:"remark"`
 	Disabled   *bool     `json:"disabled"`
 	Priority   *int      `json:"priority"`
+	BalanceUSD *float64  `json:"balance_usd"`
 	Models     *[]string `json:"disabled_models"`
 	BaseURL    *string   `json:"base_url"`
 	RefreshIDs *bool     `json:"refresh_models"`
@@ -55,6 +58,15 @@ func (s *Service) managementPatchCredential(body []byte) (any, error) {
 	}
 	if req.Priority != nil {
 		c.Priority = *req.Priority
+	}
+	if req.BalanceUSD != nil {
+		// Negative is meaningless, and zero explicitly means "no ceiling".
+		budget := math.Max(0, math.Round(*req.BalanceUSD*1e6)/1e6)
+		c.BalanceUSD = budget
+		s.setSpend(id, budget)
+		// Raising the ceiling has to put an auto-disabled key back, otherwise
+		// the operator tops up and the account stays dark until a restart.
+		s.clearAutoDisable(id)
 	}
 	if req.BaseURL != nil {
 		c.BaseURL = strings.TrimRight(strings.TrimSpace(*req.BaseURL), "/")
@@ -116,6 +128,9 @@ func (s *Service) managementPatchCredential(body []byte) (any, error) {
 		"remark":          c.Remark,
 		"disabled":        c.Disabled,
 		"priority":        c.Priority,
+		"balance_usd":     c.BalanceUSD,
+		"spent_usd":       c.SpentUSD,
+		"remaining_usd":   c.RemainingUSD(),
 		"disabled_models": c.DisabledModels,
 		"model_count":     len(c.AdvertisedModels(s.config())),
 	})
@@ -141,6 +156,9 @@ func describePatch(req patchRequest) string {
 	}
 	if req.Priority != nil {
 		parts = append(parts, "priority="+itoa(*req.Priority))
+	}
+	if req.BalanceUSD != nil {
+		parts = append(parts, "budget=$"+strconv.FormatFloat(*req.BalanceUSD, 'f', 2, 64))
 	}
 	if req.Models != nil {
 		parts = append(parts, "disabled models="+itoa(len(*req.Models)))
@@ -197,6 +215,32 @@ func (s *Service) persistCredential(c Credential, authDir, fileName string) erro
 	s.debugf("auth file written %s disabled=%t readback=%s",
 		fileName, c.Disabled, readBackFile(filepath.Join(authDir, filepath.Base(fileName))))
 	return nil
+}
+
+// managementResetSpent clears a key's accumulated spend, which is what a
+// top-up means: the ceiling stays, the running total starts over.
+func (s *Service) managementResetSpent(body []byte) (any, error) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return managementJSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+	}
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		return managementJSON(http.StatusBadRequest, map[string]string{"error": "id is required"})
+	}
+
+	s.mu.RLock()
+	_, ok := s.creds[id]
+	s.mu.RUnlock()
+	if !ok {
+		return managementJSON(http.StatusNotFound, map[string]string{"error": "no such credential"})
+	}
+	s.resetSpend(id)
+	s.clearAutoDisable(id)
+	s.log("info", "", id, http.StatusOK, 0, "spend counter reset")
+	return managementJSON(http.StatusOK, map[string]any{"ok": true, "id": id, "spent_usd": 0})
 }
 
 // managementSetModelState is the convenience endpoint behind the per-model
