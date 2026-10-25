@@ -146,7 +146,9 @@ tr.lvl-error td { color: var(--err); }
 .msg.ok { background: color-mix(in srgb, var(--ok) 12%, transparent); color: var(--ok); }
 .msg.err { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); }
 .msg.info { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
-.empty { color: var(--muted); font-size: 13px; padding: 22px; text-align: center; }
+.empty { color: var(--muted); font-size: 13px; padding: 22px; text-align: center; line-height: 1.7; }
+.empty a { color: var(--accent); text-decoration: none; }
+.empty a:hover { text-decoration: underline; }
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
 .toolbar .spacer { flex: 1; }
 .totals { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
@@ -321,8 +323,8 @@ tr.lvl-error td { color: var(--err); }
       </div>
 
       <div class="segbar" id="rangeBar">
-        <button class="seg on" data-range="all">全部</button>
-        <button class="seg" data-range="today">今天</button>
+        <button class="seg" data-range="all">全部</button>
+        <button class="seg on" data-range="today">今天</button>
         <button class="seg" data-range="24h">24 小时</button>
         <button class="seg" data-range="7d">近 7 天</button>
         <button class="seg" data-range="30d">近 30 天</button>
@@ -732,7 +734,23 @@ async function loadLogs() {
     if (!logs.length) {
       box.innerHTML = "";
       empty.style.display = "";
-      empty.textContent = "这段时间没有符合条件的记录";
+      // An empty list under a time filter looks like a broken page. Say which
+      // window came up empty and offer the one call that widens it.
+      if (logRange !== "all" && !q && !level && !model && !auth && !kind) {
+        empty.innerHTML = `今天还没有记录 · <a href="#" id="widenRange">查看全部时间</a>`;
+        const widen = $("widenRange");
+        if (widen) widen.onclick = (ev) => {
+          ev.preventDefault();
+          logRange = "all";
+          for (const b of $("rangeBar").querySelectorAll(".seg")) {
+            b.classList.toggle("on", b.dataset.range === "all");
+          }
+          logOffset = 0;
+          loadLogs();
+        };
+      } else {
+        empty.textContent = "这段时间没有符合条件的记录";
+      }
     } else {
       empty.style.display = "none";
       box.innerHTML = logs.map(renderLogRow).join("");
@@ -888,7 +906,10 @@ function shortAuth(id) {
 
 /* ---------- time ranges ---------- */
 
-let logRange = "all";
+/* Opens on today rather than everything: the list paginates, but "all" still
+   asks the server to sort the whole retained window on first paint, and that
+   window is the retention limit, not what the operator came to look at. */
+let logRange = "today";
 
 /* rangeSince turns the selected window into an RFC3339 cutoff. Relative
    windows are computed here, in the browser, so "today" means the operator's
