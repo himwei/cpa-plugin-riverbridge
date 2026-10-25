@@ -1,6 +1,9 @@
 package bridge
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestModelIDPrefixesAndStripsVendor(t *testing.T) {
 	cases := []struct {
@@ -151,5 +154,55 @@ func TestLooksLikeRiverAuth(t *testing.T) {
 		if got := looksLikeRiverAuth(tc.c); got != tc.want {
 			t.Errorf("looksLikeRiverAuth(%+v) = %v, want %v", tc.c, got, tc.want)
 		}
+	}
+}
+
+// CPA owns the downstream SSE envelope, so the plugin must forward bare JSON.
+// Forwarding the upstream line verbatim produced "data: data: [...]", and
+// forwarding [DONE] produced a duplicate terminal marker.
+func TestSSEPayloadStripsEnvelope(t *testing.T) {
+	cases := []struct {
+		name  string
+		line  string
+		want  string
+		okGot bool
+	}{
+		{"data frame", `data: {"id":"x"}`, `{"id":"x"}`, true},
+		{"no space after prefix", `data:{"id":"x"}`, `{"id":"x"}`, true},
+		{"done marker is dropped", `data: [DONE]`, `[DONE]`, true},
+		{"blank line", ``, ``, false},
+		{"comment line", `: keep-alive`, ``, false},
+		{"empty data", `data: `, ``, false},
+		{"bare json passes through", `{"id":"x"}`, `{"id":"x"}`, true},
+	}
+	for _, tc := range cases {
+		got, ok := ssePayload([]byte(tc.line))
+		if ok != tc.okGot {
+			t.Errorf("%s: ok = %v, want %v", tc.name, ok, tc.okGot)
+			continue
+		}
+		if ok && string(got) != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, string(got), tc.want)
+		}
+	}
+}
+
+// The host names the output stream on the RPC envelope under an explicit
+// stream_id tag. Decoding it as "" makes every stream fail at startup, so the
+// wire shape is worth pinning down.
+func TestStreamRequestDecodesStreamID(t *testing.T) {
+	raw := []byte(`{"Model":"river-x","stream_id":"abc123","Metadata":{"request_path":"/v1/messages"}}`)
+	var r executorStreamRequest
+	if err := json.Unmarshal(raw, &r); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if r.StreamID != "abc123" {
+		t.Errorf("StreamID = %q, want abc123", r.StreamID)
+	}
+	if r.Model != "river-x" {
+		t.Errorf("Model = %q, want river-x", r.Model)
+	}
+	if r.requestPath() != "/v1/messages" {
+		t.Errorf("requestPath = %q, want /v1/messages", r.requestPath())
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -256,19 +257,44 @@ func (s *Service) managementAddCredential(body []byte) (any, error) {
 	}
 
 	fileName := s.authFileName(id)
-	if authDir != "" {
-		if err := writeFileAtomic(authDir, fileName, jsonBytesIndent(c)); err != nil {
-			s.log("error", "", id, 0, 0, "write auth file: "+err.Error())
+
+	// Persist through the host rather than writing the auth directory directly:
+	// the host resolves the directory itself and reports where the file landed,
+	// so adding a key works even on a cold start before any auth file has been
+	// parsed (auth.parse is the only callback that carries the directory).
+	var saved struct {
+		Path string `json:"path"`
+	}
+	err = s.call("host.auth.save", map[string]any{
+		"name": fileName,
+		// The host decodes this as a JSON object, so it must be sent as raw
+		// JSON rather than a base64-encoded byte slice.
+		"json": json.RawMessage(jsonBytes(c)),
+	}, &saved)
+	if err != nil {
+		// Fall back to the directory learned from a previous parse, when there
+		// is one; otherwise the credential would silently not exist on disk.
+		if authDir == "" {
+			s.log("error", "", id, 0, 0, "persist auth file: "+err.Error())
 			return managementJSON(http.StatusInternalServerError,
-				map[string]string{"error": "writing the auth file failed: " + err.Error()})
+				map[string]string{"error": "CPA could not store the auth file: " + err.Error()})
 		}
+		if writeErr := writeFileAtomic(authDir, fileName, jsonBytesIndent(c)); writeErr != nil {
+			s.log("error", "", id, 0, 0, "write auth file: "+writeErr.Error())
+			return managementJSON(http.StatusInternalServerError,
+				map[string]string{"error": "writing the auth file failed: " + writeErr.Error()})
+		}
+	} else if saved.Path != "" {
+		authDir = filepath.Dir(saved.Path)
+		fileName = filepath.Base(saved.Path)
 	}
 
 	// Update the in-memory view immediately; the watcher callback confirms it.
 	s.mu.Lock()
 	s.creds[id] = c
+	s.files[id] = fileName
 	if authDir != "" {
-		s.files[id] = fileName
+		s.authDir = authDir
 	}
 	s.mu.Unlock()
 

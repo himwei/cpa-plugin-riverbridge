@@ -24,6 +24,7 @@ type executorRequest struct {
 	OriginalRequest []byte
 	SourceFormat    string
 	Payload         []byte
+	Metadata        map[string]any
 	StorageJSON     []byte
 	AuthMetadata    map[string]any
 	AuthAttributes  map[string]string
@@ -36,16 +37,43 @@ type executorResponse struct {
 	Metadata map[string]any
 }
 
-// executorStreamChunk is one streamed payload or error.
-type executorStreamChunk struct {
-	Payload []byte
-	Err     error
+// executorStreamRequest is the streaming subset of executorRequest: the host
+// also names the output stream the plugin must emit frames onto.
+//
+// The SDK embeds ExecutorRequest (whose fields carry no json tags and so travel
+// under their Go names) and adds StreamID with an explicit `stream_id` tag.
+// Matching that tag matters: without it the identifier decodes to "" and every
+// stream fails as if the host had sent nothing.
+type executorStreamRequest struct {
+	executorRequest
+	StreamID string `json:"stream_id"`
 }
 
-// executorStreamResponse is the streaming result handed back to the host.
-type executorStreamResponse struct {
-	Headers http.Header
-	Chunks  <-chan executorStreamChunk
+// requestPath reports which downstream protocol the request belongs to, which
+// decides who owns the SSE "data: " envelope.
+func (r executorStreamRequest) requestPath() string {
+	if path, ok := r.Metadata["request_path"].(string); ok {
+		return path
+	}
+	return ""
+}
+
+// ssePayload extracts the bare JSON body of one upstream SSE line. Comment and
+// blank lines carry nothing to forward. A line without the "data:" prefix is
+// passed through unchanged so a non-conforming upstream still works.
+func ssePayload(line []byte) ([]byte, bool) {
+	trimmed := bytes.TrimSpace(line)
+	if len(trimmed) == 0 || trimmed[0] == ':' {
+		return nil, false
+	}
+	if !bytes.HasPrefix(trimmed, []byte("data:")) {
+		return trimmed, true
+	}
+	body := bytes.TrimSpace(trimmed[len("data:"):])
+	if len(body) == 0 {
+		return nil, false
+	}
+	return body, true
 }
 
 // credentialFrom resolves the credential a request was routed to. The host
@@ -134,16 +162,25 @@ func (s *Service) execute(raw json.RawMessage) (any, error) {
 }
 
 // executeStream performs one streaming chat completion.
+//
+// Exactly one module boundary is crossed here: the plugin runs inside a C
+// shared object, so a Go channel cannot be returned to the host. Frames are
+// therefore pushed with host.stream.emit and the call returns only a plain,
+// encodable descriptor. Returning the frames instead makes CPA reject the
+// response with "plugin response cannot be encoded".
 func (s *Service) executeStream(raw json.RawMessage) (any, error) {
-	var r executorRequest
+	var r executorStreamRequest
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return nil, err
 	}
-	c, err := s.credentialFrom(r)
+	if r.StreamID == "" {
+		return nil, fail(500, "host provided no output stream identifier")
+	}
+	c, err := s.credentialFrom(r.executorRequest)
 	if err != nil {
 		return nil, err
 	}
-	upstream, body, err := s.prepareUpstream(c, r)
+	upstream, body, err := s.prepareUpstream(c, r.executorRequest)
 	if err != nil {
 		return nil, err
 	}
@@ -166,28 +203,89 @@ func (s *Service) executeStream(raw json.RawMessage) (any, error) {
 		return nil, mapped
 	}
 
-	chunks := make(chan executorStreamChunk, 16)
-	started := time.Now()
-	go s.pumpStream(c, r.Model, upstream, resp.Body, chunks, started, cancel)
-
-	return executorStreamResponse{
-		Headers: responseHeaders(resp.Header),
-		Chunks:  chunks,
+	// Hand the first frame back before returning, so a failure to reach model
+	// output is still reported through the RPC envelope instead of surfacing as
+	// a truncated stream. Emits are acknowledged by the host one at a time.
+	ready := make(chan error, 1)
+	go s.pumpStream(c, r, upstream, resp.Body, ready, time.Now(), cancel)
+	if err := <-ready; err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"headers": http.Header{
+			"Content-Type":  []string{"text/event-stream"},
+			"Cache-Control": []string{"no-cache"},
+		},
 	}, nil
 }
 
-// pumpStream copies SSE bytes downstream while watching for the final usage
+// pumpStream forwards SSE bytes to the host while watching for the final usage
 // frame so accounting still works on streamed requests.
-func (s *Service) pumpStream(c Credential, model, upstream string, body io.ReadCloser, out chan<- executorStreamChunk, started time.Time, cancel context.CancelFunc) {
-	defer close(out)
+func (s *Service) pumpStream(c Credential, r executorStreamRequest, upstream string, body io.ReadCloser, ready chan<- error, started time.Time, cancel context.CancelFunc) {
 	defer cancel()
 	defer func() { _ = body.Close() }()
 
+	model := r.Model
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64<<10), 8<<20)
 
 	var usage *Usage
 	var sawDone bool
+	announced := false
+
+	// emit pushes one frame; the first successful one releases the caller.
+	emit := func(payload []byte) error {
+		if err := s.call("host.stream.emit", map[string]any{
+			"stream_id": r.StreamID,
+			"payload":   payload,
+		}, nil); err != nil {
+			return err
+		}
+		if !announced {
+			announced = true
+			ready <- nil
+		}
+		return nil
+	}
+
+	closeStream := func(streamErr error) {
+		payload := map[string]any{"stream_id": r.StreamID}
+		if streamErr != nil {
+			payload["error"] = streamErr.Error()
+		}
+		_ = s.call("host.stream.close", payload, nil)
+	}
+
+	defer func() {
+		if rec := recover(); rec != nil {
+			msg := "stream handler panicked"
+			s.recordFailure(c.ID, model, msg)
+			s.log("error", model, c.ID, 0, time.Since(started).Milliseconds(), msg)
+			closeStream(fail(502, msg))
+			if !announced {
+				ready <- fail(502, msg)
+			}
+			return
+		}
+		if !announced {
+			// Nothing reached the client: report through the RPC envelope.
+			err := fail(502, "River stream ended before any completion frame")
+			s.recordFailure(c.ID, model, err.Error())
+			closeStream(err)
+			ready <- err
+			return
+		}
+		if !sawDone {
+			// A truncated stream must not look like a clean finish.
+			s.log("warn", model, c.ID, 0, time.Since(started).Milliseconds(),
+				"stream ended without [DONE]")
+		}
+		closeStream(nil)
+		s.recordSuccess(c.ID, model, upstream, usage)
+		s.log("info", model, c.ID, 200, time.Since(started).Milliseconds(),
+			"stream "+summariseUsage(usage))
+	}()
+
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if bytes.Contains(line, []byte(`"usage"`)) {
@@ -195,17 +293,27 @@ func (s *Service) pumpStream(c Credential, model, upstream string, body io.ReadC
 				usage = u
 			}
 		}
-		if bytes.Equal(bytes.TrimSpace(line), []byte("data: [DONE]")) {
+		trimmed := bytes.TrimSpace(line)
+		if bytes.Equal(trimmed, []byte("data: [DONE]")) {
 			sawDone = true
+			// CPA owns the terminal marker; emitting it here would duplicate
+			// it as "data: data: [DONE]".
+			continue
 		}
-		// Re-add the newline the scanner stripped so the SSE framing survives.
-		payload := append(append([]byte{}, line...), '\n')
-		select {
-		case out <- executorStreamChunk{Payload: payload}:
-		case <-time.After(5 * time.Minute):
+		// Either the host re-adds the "data: " envelope itself (chat and
+		// responses) or, for /v1/messages, the plugin supplies it. Strip the
+		// upstream envelope either way so frames carry bare JSON.
+		frameBytes, ok := ssePayload(line)
+		if !ok {
+			continue
+		}
+		if r.requestPath() == "/v1/messages" {
+			frameBytes = append(append([]byte("data: "), frameBytes...), []byte("\n\n")...)
+		}
+		if err := emit(frameBytes); err != nil {
 			s.recordFailure(c.ID, model, "downstream stopped reading the stream")
 			s.log("error", model, c.ID, 0, time.Since(started).Milliseconds(),
-				"downstream stalled for 5m")
+				"stream emit: "+err.Error())
 			return
 		}
 	}
@@ -213,20 +321,12 @@ func (s *Service) pumpStream(c Credential, model, upstream string, body io.ReadC
 		s.recordFailure(c.ID, model, err.Error())
 		s.log("error", model, c.ID, 0, time.Since(started).Milliseconds(),
 			"stream read: "+err.Error())
-		select {
-		case out <- executorStreamChunk{Err: err}:
-		default:
+		closeStream(fail(502, "River stream read failed: "+err.Error()))
+		if !announced {
+			ready <- fail(502, "River stream read failed: "+err.Error())
 		}
 		return
 	}
-	if !sawDone {
-		// A truncated stream must not look like a clean finish.
-		s.log("warn", model, c.ID, 0, time.Since(started).Milliseconds(),
-			"stream ended without [DONE]")
-	}
-	s.recordSuccess(c.ID, model, upstream, usage)
-	s.log("info", model, c.ID, 200, time.Since(started).Milliseconds(),
-		"stream "+summariseUsage(usage))
 }
 
 // prepareUpstream builds the River request body from the host payload.
