@@ -129,7 +129,7 @@ func (s *Service) execute(raw json.RawMessage) (any, error) {
 		s.recordFailure(c.ID, r.Model, err.Error())
 		s.logRequest(logEntry{
 			Level: "error", Model: r.Model, Upstream: upstream, AuthID: c.ID,
-			Status: statusOf(err), Millis: elapsed, FirstByteMs: elapsed,
+			Status: statusOf(err), Millis: elapsed,
 			Detail: err.Error(),
 		})
 		return nil, err
@@ -143,7 +143,7 @@ func (s *Service) execute(raw json.RawMessage) (any, error) {
 		s.recordFailure(c.ID, r.Model, readErr.Error())
 		s.logRequest(logEntry{
 			Level: "error", Model: r.Model, Upstream: upstream, AuthID: c.ID,
-			Status: resp.StatusCode, Millis: elapsed, FirstByteMs: elapsed,
+			Status: resp.StatusCode, Millis: elapsed,
 			Detail: "read upstream response: " + readErr.Error(),
 		})
 		return nil, fail(502, "reading River response failed: "+readErr.Error())
@@ -153,7 +153,7 @@ func (s *Service) execute(raw json.RawMessage) (any, error) {
 		s.recordFailure(c.ID, r.Model, mapped.Error())
 		s.logRequest(logEntry{
 			Level: "error", Model: r.Model, Upstream: upstream, AuthID: c.ID,
-			Status: resp.StatusCode, Millis: elapsed, FirstByteMs: elapsed,
+			Status: resp.StatusCode, Millis: elapsed,
 			Detail: mapped.Error(),
 		})
 		return nil, mapped
@@ -161,9 +161,12 @@ func (s *Service) execute(raw json.RawMessage) (any, error) {
 
 	usage := usageFromBody(payload)
 	s.recordSuccess(c.ID, r.Model, upstream, usage)
+	// FirstByteMs stays unset: a non-streaming call hands the whole body over in
+	// one read, so there is no time-to-first-token to report and pretending the
+	// total was one would inflate every average that includes these rows.
 	entry := logEntry{
 		Model: r.Model, Upstream: upstream, AuthID: c.ID,
-		Status: resp.StatusCode, Millis: elapsed, FirstByteMs: elapsed,
+		Status: resp.StatusCode, Millis: elapsed,
 		Detail: summariseUsage(usage),
 	}
 	entry.fillUsage(usage)
@@ -211,9 +214,11 @@ func (s *Service) executeStream(raw json.RawMessage) (any, error) {
 	if err != nil {
 		elapsed := time.Since(started).Milliseconds()
 		s.recordFailure(c.ID, r.Model, err.Error())
+		// No frame ever arrived, so there is no first byte to report; leaving it
+		// unset keeps a connect failure out of the first-byte average.
 		s.logRequest(logEntry{
 			Level: "error", Model: r.Model, Upstream: upstream, AuthID: c.ID,
-			Status: statusOf(err), Millis: elapsed, FirstByteMs: elapsed,
+			Status: statusOf(err), Millis: elapsed,
 			Stream: true, Detail: err.Error(),
 		})
 		return nil, err
@@ -227,8 +232,7 @@ func (s *Service) executeStream(raw json.RawMessage) (any, error) {
 		s.logRequest(logEntry{
 			Level: "error", Model: r.Model, Upstream: upstream, AuthID: c.ID,
 			Status: resp.StatusCode, Millis: time.Since(started).Milliseconds(),
-			FirstByteMs: time.Since(started).Milliseconds(),
-			Stream:      true, Detail: mapped.Error(),
+			Stream: true, Detail: mapped.Error(),
 		})
 		return nil, mapped
 	}
