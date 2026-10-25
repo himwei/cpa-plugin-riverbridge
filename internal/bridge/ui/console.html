@@ -5,28 +5,79 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RiverBridge</title>
 <style>
+/* Palette adapted from ClinePassBridge, which settles on warm paper rather than
+   the blue-on-charcoal this panel started with. The greys carry a warm cast so
+   large areas of them read as pages, not as a dimmed screen, and each state has
+   its own hue instead of three steps of grey: that is what lets an operator
+   pick the failed request out of forty lines at a glance.
+
+   Values are Cline's own (#f0eee8 paper, #2d2a26 ink, #8b8680 warm accent),
+   with one deliberate change: in dark mode the card surface sits a step above
+   the page instead of matching it exactly, so a card still reads as a card. */
 :root {
-  --bg: #0f1115;
-  --panel: #171a21;
-  --panel-2: #1e222b;
-  --line: #272c37;
-  --text: #e6e9ef;
-  --muted: #8b93a7;
-  --accent: #4c8dff;
-  --accent-2: #2f6fd0;
-  --ok: #35c48a;
-  --warn: #e0a03a;
-  --err: #e05a5a;
+  --bg: #f0eee8;
+  --panel: #fffdf9;
+  --panel-2: #f0eee8;
+  --line: #d5d2cb;
+  --text: #2d2a26;
+  --muted: #6d6760;
+  --accent: #8a5a2b;
+  --accent-2: #6f4620;
+  --accent-ink: #fffdf9;
+  --ok: #0b6b49;
+  --warn: #8a5303;
+  --err: #a83a2b;
+  --gold: #d8b45c;
+  --focus: #8a5a2b;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .08);
+  --shadow-lift: 0 2px 10px rgba(0, 0, 0, .07);
+  --inset: color-mix(in srgb, var(--panel-2) 35%, var(--panel));
+  --inset-line: color-mix(in srgb, var(--line) 75%, var(--panel));
+  color-scheme: light;
 }
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #f5f6f8;
-    --panel: #ffffff;
-    --panel-2: #f0f2f5;
-    --line: #dfe3ea;
-    --text: #1a1d23;
-    --muted: #6b7280;
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1d1b18;
+    --panel: #24211d;
+    --panel-2: #262320;
+    --line: #4a453f;
+    --text: #f6f4f1;
+    --muted: #c9c3bb;
+    --accent: #d8b45c;
+    --accent-2: #e8c978;
+    --accent-ink: #1d1b18;
+    --ok: #6ee7b7;
+    --warn: #f2c77c;
+    --err: #f1a399;
+    --gold: #d8b45c;
+    --focus: #d8b45c;
+    --shadow: 0 1px 3px rgba(0, 0, 0, .3);
+    --shadow-lift: 0 3px 14px rgba(0, 0, 0, .35);
+    --inset: color-mix(in srgb, var(--panel-2) 55%, var(--panel));
+    --inset-line: color-mix(in srgb, var(--line) 75%, var(--panel));
+    color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #1d1b18;
+  --panel: #24211d;
+  --panel-2: #262320;
+  --line: #4a453f;
+  --text: #f6f4f1;
+  --muted: #c9c3bb;
+  --accent: #d8b45c;
+  --accent-2: #e8c978;
+  --accent-ink: #1d1b18;
+  --ok: #6ee7b7;
+  --warn: #f2c77c;
+  --err: #f1a399;
+  --gold: #d8b45c;
+  --focus: #d8b45c;
+  --shadow: 0 1px 3px rgba(0, 0, 0, .3);
+  --shadow-lift: 0 3px 14px rgba(0, 0, 0, .35);
+  --inset: color-mix(in srgb, var(--panel-2) 55%, var(--panel));
+  --inset-line: color-mix(in srgb, var(--line) 75%, var(--panel));
+  color-scheme: dark;
 }
 * { box-sizing: border-box; }
 body {
@@ -45,8 +96,9 @@ header {
 }
 header .logo {
   width: 30px; height: 30px; border-radius: 8px;
-  background: linear-gradient(135deg, var(--accent), #7c5cff);
-  display: grid; place-items: center; font-weight: 700; color: #fff; font-size: 15px;
+  background: var(--accent);
+  display: grid; place-items: center; font-weight: 700;
+  color: var(--accent-ink); font-size: 15px;
 }
 header h1 { font-size: 16px; margin: 0; font-weight: 600; }
 header .sub { color: var(--muted); font-size: 12px; }
@@ -70,6 +122,7 @@ main { max-width: 1180px; margin: 0 auto; padding: 22px; }
   border-radius: 12px;
   padding: 16px 18px;
   margin-bottom: 16px;
+  box-shadow: var(--shadow);
 }
 .card h2 { font-size: 14px; margin: 0 0 12px; font-weight: 600; }
 .card h2 .hint { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 8px; }
@@ -84,7 +137,7 @@ input[type=text], input[type=password], input[type=number], select {
   font-size: 13px;
   font-family: inherit;
 }
-input:focus, select:focus { outline: 2px solid var(--accent-2); outline-offset: 1px; }
+input:focus, select:focus { outline: 2px solid var(--focus); outline-offset: 1px; }
 .row { display: flex; gap: 12px; }
 .row > div { flex: 1; }
 button {
@@ -98,8 +151,8 @@ button {
   cursor: pointer;
 }
 button:hover { border-color: var(--accent-2); }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
-button.primary:hover { background: var(--accent-2); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button.primary:hover { background: var(--accent-2); border-color: var(--accent-2); }
 button.danger { color: var(--err); }
 button.danger:hover { border-color: var(--err); }
 button.sm { padding: 5px 10px; font-size: 12px; }
@@ -126,11 +179,12 @@ button:disabled { opacity: .5; cursor: default; }
   font-size: 11px; padding: 2px 8px; border-radius: 20px;
   border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
 }
-.badge.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
-.badge.off { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
-.badge.err { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, var(--line)); }
+.badge.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); background: color-mix(in srgb, var(--ok) 12%, var(--panel)); }
+.badge.off { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); background: color-mix(in srgb, var(--warn) 12%, var(--panel)); }
+.badge.err { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, var(--line)); background: color-mix(in srgb, var(--err) 12%, var(--panel)); }
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
-.stat { background: var(--panel-2); border-radius: 8px; padding: 8px 10px; }
+.stat { background: var(--inset); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.stat .v strong, .stat .v { color: var(--text); }
 .stat .k { font-size: 11px; color: var(--muted); }
 .stat .v { font-size: 13px; font-variant-numeric: tabular-nums; }
 .meta { margin-top: 10px; font-size: 11px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 10px; }
@@ -171,16 +225,21 @@ tr.lvl-error td { color: var(--err); }
 }
 .switch span::after {
   content: ""; position: absolute; width: 15px; height: 15px; left: 3px; top: 3px;
-  background: #fff; border-radius: 50%; transition: transform .15s;
+  background: #fffdf9; border-radius: 50%; transition: transform .15s;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .28);
 }
-.switch input:checked + span { background: var(--accent); }
-.switch input:checked + span::after { transform: translateX(17px); }
+.switch input:checked + span { background: var(--accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-2) 60%, transparent); }
+.switch input:checked + span::after { transform: translateX(17px); background: #fffdf9; }
 .switch input:disabled + span { opacity: .5; cursor: default; }
 .choice {
   display: block; border: 1px solid var(--line); border-radius: 10px;
   padding: 12px 14px; margin-bottom: 10px; cursor: pointer; background: var(--panel-2);
 }
-.choice.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--panel-2)); }
+.choice.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  box-shadow: var(--shadow-lift);
+}
 .choice .t { font-weight: 600; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
 .choice .d { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .choice input { width: auto; margin: 0; }
@@ -195,7 +254,10 @@ tr.lvl-error td { color: var(--err); }
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; user-select: none;
 }
 .mchip input { width: 13px; height: 13px; margin: 0; accent-color: var(--ok); cursor: pointer; }
-.mchip.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+.mchip.on {
+  color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
+  background: color-mix(in srgb, var(--ok) 10%, var(--panel));
+}
 .mchip:hover { border-color: var(--accent-2); }
 .mchip.dirty { border-color: var(--warn); }
 /* Blocked for every account: the operator cannot open it here, only in the
@@ -218,7 +280,7 @@ tr.lvl-error td { color: var(--err); }
   display: flex; flex-wrap: wrap; gap: 6px 18px;
   margin: -4px 0 14px; font-size: 12px; color: var(--muted);
 }
-.durablebar b { color: var(--fg); font-weight: 600; }
+.durablebar b { color: var(--text); font-weight: 600; }
 .durablebar .warn { color: var(--warn); }
 
 /* Modal for the add-account form. Kept as a dialog so the key field is not
@@ -240,10 +302,10 @@ tr.lvl-error td { color: var(--err); }
 .statrow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
 .statrow .s {
   background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-  padding: 12px 14px;
+  padding: 12px 14px; box-shadow: var(--shadow);
 }
 .statrow .s .k { font-size: 11.5px; color: var(--muted); margin-bottom: 6px; }
-.statrow .s .v { font-size: 21px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.3px; }
+.statrow .s .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.4px; color: var(--text); }
 .statrow .s .u { font-size: 11.5px; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
 
 /* Segmented time range. Manual only: nothing on this page refreshes itself. */
@@ -252,7 +314,10 @@ tr.lvl-error td { color: var(--err); }
   padding: 5px 13px; font-size: 12.5px; border-radius: 7px;
   background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
 }
-.seg.on { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel-2)); font-weight: 500; }
+.seg.on {
+  color: var(--text); border-color: var(--inset-line, var(--line));
+  background: var(--panel); font-weight: 600; box-shadow: var(--shadow);
+}
 
 /* One request is one card, not a table row with a hairline under it. A 1px
    divider makes the eye draw the row boundary itself, and on the dark panel the
@@ -263,14 +328,15 @@ tr.lvl-error td { color: var(--err); }
 .lrow {
   display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; gap: 4px 18px;
   padding: 13px 16px; align-items: start; font-size: 12.5px;
-  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
   border-left: 3px solid var(--line);
-  transition: border-color .15s ease, background .15s ease;
+  box-shadow: var(--shadow);
+  transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
 }
-.lrow:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
-.lrow.err { border-left-color: var(--err); background: color-mix(in srgb, var(--err) 7%, var(--panel-2)); }
-.lrow.warn { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 7%, var(--panel-2)); }
-.lrow.ok { border-left-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
+.lrow:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); box-shadow: var(--shadow-lift); }
+.lrow.ok { border-left-color: var(--ok); }
+.lrow.warn { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 9%, var(--panel)); }
+.lrow.err { border-left-color: var(--err); background: color-mix(in srgb, var(--err) 9%, var(--panel)); }
 .lrow .when { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; padding-top: 2px; }
 .lrow .main { min-width: 0; }
 .lrow .model { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; word-break: break-all; display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
@@ -284,8 +350,20 @@ tr.lvl-error td { color: var(--err); }
 }
 .lrow .nums .n .k { font-size: 10.5px; color: var(--muted); letter-spacing: .02em; }
 .lrow .nums .n .v { font-size: 13px; white-space: nowrap; margin-top: 2px; }
-.lrow .nums .n .v.good { color: var(--ok); }
-.lrow .nums .n .v.bad { color: var(--err); }
+/* On the dark theme the ruled column was the only thing marking where the
+   numbers start: --line there is close to the panel, so it read as a smudge.
+   Lighten the rule and the labels instead of adding more chrome. */
+:root[data-theme="dark"] .lrow .nums,
+:root[data-theme="dark"] .lrow .when { border-color: #5a544c; }
+:root[data-theme="dark"] .lrow .nums .n .k { color: #a9a29a; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .lrow .nums,
+  :root:not([data-theme="light"]) .lrow .when { border-color: #5a544c; }
+  :root:not([data-theme="light"]) .lrow .nums .n .k { color: #a9a29a; }
+}
+.lrow .nums .n .v.good { color: var(--ok); font-weight: 600; }
+.lrow .nums .n .v.bad { color: var(--err); font-weight: 600; }
+.lrow .nums .n .v.slow { color: var(--warn); font-weight: 600; }
 .speed { color: var(--muted); font-size: 11px; }
 .badge.k { font-size: 10.5px; padding: 1px 6px; }
 .kv { display: grid; grid-template-columns: 180px 1fr; gap: 8px 14px; font-size: 13px; }
@@ -311,6 +389,7 @@ tr.lvl-error td { color: var(--err); }
     <div class="sub">River 推理接入 CPA · 模型前缀 <code>river-</code></div>
   </div>
   <div class="spacer"></div>
+  <button class="sm" id="themeToggle" title="在浅色与深色之间切换">深色</button>
   <div class="sub" id="status">连接中…</div>
 </header>
 
@@ -687,6 +766,34 @@ $("tabs").addEventListener("click", (ev) => {
   const btn = ev.target.closest("button[data-tab]");
   if (btn) selectTab(btn.dataset.tab);
 });
+
+/* ---------- theme ---------- */
+
+// The system preference is the default; this only records an explicit choice.
+// Applied on <html data-theme> so both the media query and this hook agree.
+const THEME_KEY = "riverbridge-theme";
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === "dark" || mode === "light") {
+    root.setAttribute("data-theme", mode);
+  } else {
+    root.removeAttribute("data-theme");
+  }
+  const dark = mode === "dark" || (mode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  $("themeToggle").textContent = dark ? "浅色" : "深色";
+}
+function currentTheme() {
+  try { return localStorage.getItem(THEME_KEY) || "system"; } catch (e) { return "system"; }
+}
+$("themeToggle").addEventListener("click", () => {
+  const dark = document.documentElement.getAttribute("data-theme") === "dark"
+    || (!document.documentElement.hasAttribute("data-theme")
+        && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const next = dark ? "light" : "dark";
+  try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
+  applyTheme(next);
+});
+applyTheme(currentTheme());
 
 /* ---------- status ---------- */
 
