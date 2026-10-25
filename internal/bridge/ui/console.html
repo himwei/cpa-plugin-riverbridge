@@ -198,6 +198,10 @@ tr.lvl-error td { color: var(--err); }
 .mchip.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
 .mchip:hover { border-color: var(--accent-2); }
 .mchip.dirty { border-color: var(--warn); }
+/* Blocked for every account: the operator cannot open it here, only in the
+   settings tab, so it reads as unavailable rather than as a free choice. */
+.mchip.global { opacity: .5; border-style: dashed; }
+.mchip.global input { cursor: not-allowed; }
 .dirtybar {
   display: flex; align-items: center; gap: 10px; margin-top: 12px;
   padding-top: 10px; border-top: 1px dashed var(--line);
@@ -981,6 +985,10 @@ $("exportLogs").addEventListener("click", async () => {
 /* ---------- credentials ---------- */
 
 let credCache = [];
+/* Models switched off for every account. Kept outside the credential because
+   the card has to show a globally blocked model as unavailable, and it knows
+   nothing about the settings tab otherwise. */
+let globalBlocked = new Set();
 
 async function loadCreds() {
   const box = $("creds");
@@ -988,6 +996,7 @@ async function loadCreds() {
     const data = await call("/credentials");
     const list = data.credentials || [];
     credCache = list;
+    globalBlocked = new Set((data.disabled_models || []).map((m) => String(m).toLowerCase()));
     const off = list.filter((c) => c.disabled).length;
     $("credCount").textContent = list.length
       ? `（${list.length} 个，${list.length - off} 启用 / ${off} 禁用）` : "";
@@ -1014,10 +1023,15 @@ function renderCred(c) {
   const disabledModels = new Set((c.disabled_models || []).map((m) => m.toLowerCase()));
   const chips = (c.models || []).map((m) => {
     const id = String(m.id);
-    const on = !disabledModels.has(id.toLowerCase());
-    return `<label class="mchip ${on ? "on" : ""}" data-id="${escapeHTML(c.id)}"
-              data-model="${escapeHTML(id)}" title="${escapeHTML(m.upstream || id)}">
-              <input type="checkbox" ${on ? "checked" : ""}>
+    const blockedGlobally = globalBlocked.has(id.toLowerCase());
+    const on = !disabledModels.has(id.toLowerCase()) && !blockedGlobally;
+    const title = blockedGlobally
+      ? "已在「设置概览 → 全局模型开关」中禁用，这里无法单独打开"
+      : (m.upstream || id);
+    return `<label class="mchip ${on ? "on" : ""}${blockedGlobally ? " global" : ""}"
+              data-id="${escapeHTML(c.id)}" data-model="${escapeHTML(id)}"
+              title="${escapeHTML(title)}">
+              <input type="checkbox" ${on ? "checked" : ""} ${blockedGlobally ? "disabled" : ""}>
               <span>${escapeHTML(id)}</span>
             </label>`;
   }).join("");
@@ -1125,11 +1139,15 @@ $("creds").addEventListener("click", async (ev) => {
     } else if (act === "saveModels") {
       const list = document.querySelector(`.modellist[data-list="${CSS.escape(id)}"]`);
       if (!list) return;
-      const on = [...list.querySelectorAll(".mchip")]
+      // Only chips this card can actually toggle take part. A globally blocked
+      // model is unchecked on every card, and folding it into this account's
+      // own list would keep it off for that account after the global switch is
+      // turned back on.
+      const chips = [...list.querySelectorAll(".mchip")].filter((chip) => !chip.classList.contains("global"));
+      const on = chips
         .filter((chip) => chip.querySelector("input").checked)
         .map((chip) => chip.dataset.model);
-      const cred = credCache.find((c) => c.id === id);
-      const all = ((cred && cred.models) || []).map((m) => String(m.id));
+      const all = chips.map((chip) => chip.dataset.model);
       const off = all.filter((m) => !on.includes(m)).map((m) => m.toLowerCase());
       await patchCredential({ id: id, disabled_models: off });
       await Promise.all([loadCreds(), loadModels()]);

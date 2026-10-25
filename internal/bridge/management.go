@@ -236,7 +236,14 @@ func (s *Service) managementCredentials() (any, error) {
 		})
 	}
 	sort.Slice(views, func(i, j int) bool { return views[i].ID < views[j].ID })
-	return managementJSON(http.StatusOK, map[string]any{"credentials": views, "count": len(views)})
+	// The console needs the account-wide block list to render a chip as
+	// unavailable. Without it a globally disabled model still looked enabled on
+	// every card, because the card only knew about its own list.
+	return managementJSON(http.StatusOK, map[string]any{
+		"credentials":     views,
+		"count":           len(views),
+		"disabled_models": nonNilStrings(cfg.DisabledModels),
+	})
 }
 
 // managementAddCredential validates a key upstream, then persists it as an auth
