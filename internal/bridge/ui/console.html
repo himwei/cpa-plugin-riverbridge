@@ -238,26 +238,38 @@ tr.lvl-error td { color: var(--err); }
 }
 .seg.on { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel-2)); font-weight: 500; }
 
-/* One request row: identity on the left, the numbers an operator compares on
-   the right, all aligned so the eye can scan the column. */
+/* One request is one card, not a table row with a hairline under it. A 1px
+   divider makes the eye draw the row boundary itself, and on the dark panel the
+   rules dissolve into the background so consecutive calls run together. A
+   bounded surface with real spacing groups the fields of one call without the
+   reader having to work out where it ends. */
+.loglist { display: flex; flex-direction: column; gap: 8px; }
 .lrow {
-  display: grid; grid-template-columns: 108px 1fr auto; gap: 4px 16px;
-  padding: 11px 4px; border-bottom: 1px solid var(--line);
-  align-items: start; font-size: 12.5px;
+  display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; gap: 4px 18px;
+  padding: 13px 16px; align-items: start; font-size: 12.5px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+  border-left: 3px solid var(--line);
+  transition: border-color .15s ease, background .15s ease;
 }
-.lrow:last-child { border-bottom: none; }
-.lrow.err { background: color-mix(in srgb, var(--err) 6%, transparent); }
-.lrow.warn { background: color-mix(in srgb, var(--warn) 6%, transparent); }
+.lrow:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.lrow.err { border-left-color: var(--err); background: color-mix(in srgb, var(--err) 7%, var(--panel-2)); }
+.lrow.warn { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 7%, var(--panel-2)); }
+.lrow.ok { border-left-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
 .lrow .when { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; padding-top: 2px; }
 .lrow .main { min-width: 0; }
-.lrow .model { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
-.lrow .sub2 { color: var(--muted); font-size: 11.5px; margin-top: 3px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.lrow .nums { display: flex; gap: 18px; text-align: right; font-variant-numeric: tabular-nums; }
-.lrow .nums .n .k { font-size: 10.5px; color: var(--muted); }
-.lrow .nums .n .v { font-size: 13px; white-space: nowrap; }
+.lrow .model { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; word-break: break-all; display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+.lrow .sub2 { color: var(--muted); font-size: 11.5px; margin-top: 5px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.lrow .detail { color: var(--muted); font-size: 11.5px; margin-top: 6px; word-break: break-word; }
+/* The numbers get their own ruled-off block so they read as a column of facts
+   rather than as more prose on the same line. */
+.lrow .nums {
+  display: flex; gap: 20px; text-align: right; font-variant-numeric: tabular-nums;
+  padding-left: 18px; border-left: 1px solid var(--line);
+}
+.lrow .nums .n .k { font-size: 10.5px; color: var(--muted); letter-spacing: .02em; }
+.lrow .nums .n .v { font-size: 13px; white-space: nowrap; margin-top: 2px; }
 .lrow .nums .n .v.good { color: var(--ok); }
 .lrow .nums .n .v.bad { color: var(--err); }
-.lrow .detail { grid-column: 2 / -1; color: var(--muted); font-size: 11.5px; margin-top: 5px; word-break: break-word; }
 .speed { color: var(--muted); font-size: 11px; }
 .badge.k { font-size: 10.5px; padding: 1px 6px; }
 .kv { display: grid; grid-template-columns: 180px 1fr; gap: 8px 14px; font-size: 13px; }
@@ -329,7 +341,7 @@ tr.lvl-error td { color: var(--err); }
       </div>
 
       <div id="logEmpty" class="empty" style="display:none"></div>
-      <div id="logRows"></div>
+      <div class="loglist" id="logRows"></div>
 
       <div class="pager">
         <span id="logRange">—</span>
@@ -373,7 +385,9 @@ tr.lvl-error td { color: var(--err); }
       <div class="row">
         <div style="flex:2">
           <label for="key">API Key</label>
-          <input type="password" id="key" placeholder="rv_..." autocomplete="off" spellcheck="false">
+          <input type="password" id="key" placeholder="rv_..." autocomplete="new-password"
+                 spellcheck="false" data-lpignore="true" data-1p-ignore data-bwignore
+                 readonly onfocus="this.removeAttribute('readonly')">
         </div>
         <div style="flex:1.2">
           <label for="label">备注名（可选）</label>
@@ -439,7 +453,7 @@ tr.lvl-error td { color: var(--err); }
       <div class="row">
         <div>
           <label for="sLogRetention">日志保留条数</label>
-          <input type="number" id="sLogRetention" min="50" max="20000" step="50">
+          <input type="number" id="sLogRetention" min="50" max="10000" step="50">
         </div>
         <div>
           <label for="sTimeout">请求超时（秒）</label>
@@ -499,7 +513,9 @@ tr.lvl-error td { color: var(--err); }
       <option value="x-management-key">X-Management-Key</option>
     </select>
     <label for="mk">管理密钥</label>
-    <input type="password" id="mk" autocomplete="off" spellcheck="false"
+    <input type="password" id="mk" autocomplete="new-password" spellcheck="false"
+           data-lpignore="true" data-1p-ignore data-bwignore
+           readonly onfocus="this.removeAttribute('readonly')"
            onkeydown="if(event.key==='Enter')unlockConsole()">
     <label style="display:flex;align-items:center;gap:7px;margin-top:12px;cursor:pointer">
       <input type="checkbox" id="mkRemember" style="width:auto;margin:0">
@@ -853,7 +869,7 @@ function renderLogRow(l) {
   if (l.upstream) meta.push(`<span>上游 ${escapeHTML(l.upstream)}</span>`);
   if (l.auth_id) meta.push(`<span>${escapeHTML(shortAuth(l.auth_id))}</span>`);
 
-  return `<div class="lrow ${cls}">
+  return `<div class="lrow ${cls || "ok"}">
     ${when}
     <div class="main">
       <div class="model">${escapeHTML(l.model || "—")} ${status}</div>
@@ -1118,7 +1134,9 @@ function openAddModal() {
   $("addModal").style.display = "grid";
   $("addMsg").className = "msg";
   $("addMsg").textContent = "";
-  setTimeout(() => $("key").focus(), 30);
+  // Same reason as lockConsole: focusing a password field summons the browser's
+  // saved-credential popup over the dialog.
+  setTimeout(() => { const k = $("key"); if (k) k.setAttribute("readonly", ""); }, 30);
 }
 function closeAddModal() {
   $("addModal").style.display = "none";
@@ -1181,7 +1199,7 @@ async function loadSettings() {
       <div class="k">请求超时</div><div class="v">${escapeHTML(s.request_timeout_seconds)} 秒</div>
       <div class="k">可用模型</div><div class="v">${(data.models || []).length} 个</div>`;
 
-    $("sLogRetention").value = s.log_retention || 300;
+    $("sLogRetention").value = s.log_retention || 1000;
     $("sTimeout").value = s.request_timeout_seconds || 600;
     $("sBase").value = s.base_url || "";
     $("sStreamUsage").checked = s.include_stream_usage !== false;
@@ -1299,7 +1317,7 @@ $("saveSettings").addEventListener("click", async () => {
     await call("/settings", {
       method: "POST",
       body: JSON.stringify({
-        log_retention: parseInt($("sLogRetention").value, 10) || 300,
+        log_retention: parseInt($("sLogRetention").value, 10) || 1000,
         request_timeout_seconds: parseInt($("sTimeout").value, 10) || 600,
         base_url: $("sBase").value.trim(),
         include_stream_usage: $("sStreamUsage").checked,
@@ -1362,7 +1380,8 @@ function lockConsole() {
   const box = $("lock");
   if (box.style.display === "grid") return;
   box.style.display = "grid";
-  $("mk").focus();
+  // Deliberately not focusing #mk: giving a password input focus is what makes
+  // the browser offer to fill in an unrelated saved login for this origin.
 }
 
 async function unlockConsole() {

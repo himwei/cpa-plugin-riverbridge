@@ -124,6 +124,15 @@ func (s *Service) managementSaveSettings(body []byte) (any, error) {
 	if req.LogRetention != nil {
 		cfg.LogRetention = *req.LogRetention
 	}
+	// Reject an out-of-range value the way the sibling plugin does instead of
+	// silently clamping: an operator who typed 20000 should be told it is out
+	// of range, not left wondering why only 10000 rows are kept.
+	if cfg.LogRetention < MinLogRetention || cfg.LogRetention > MaxLogRetention {
+		s.configMu.Unlock()
+		return managementJSON(http.StatusBadRequest, map[string]string{
+			"error": "log_retention 必须在 50 到 10000 之间",
+		})
+	}
 	if req.RequestTimeoutSeconds != nil {
 		cfg.RequestTimeoutSeconds = *req.RequestTimeoutSeconds
 	}

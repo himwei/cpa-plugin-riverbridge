@@ -196,6 +196,15 @@ func (c Credential) BaseURLOrDefault() string {
 	return DefaultBaseURL
 }
 
+// Log retention bounds. The default and the accepted range match
+// ClinePassBridge's, so the same number means the same thing in both consoles
+// instead of looking like one plugin lost rows the other kept.
+const (
+	DefaultLogRetention = 1000
+	MinLogRetention     = 50
+	MaxLogRetention     = 10000
+)
+
 // Routing strategies. "fill-first" keeps using the highest-priority enabled
 // key until it fails, which preserves prompt-cache affinity. "round-robin"
 // spreads requests across every enabled key.
@@ -231,7 +240,7 @@ func defaultConfig() Config {
 	return Config{
 		DataDir:               "plugins/riverbridge-data",
 		BaseURL:               DefaultBaseURL,
-		LogRetention:          300,
+		LogRetention:          DefaultLogRetention,
 		RequestTimeoutSeconds: 600,
 		IncludeStreamUsage:    true,
 		Strategy:              StrategyFillFirst,
@@ -248,7 +257,7 @@ func (c *Config) normalize() {
 	}
 	c.BaseURL = strings.TrimRight(c.BaseURL, "/")
 	if c.LogRetention <= 0 {
-		c.LogRetention = 300
+		c.LogRetention = DefaultLogRetention
 	}
 	if c.RequestTimeoutSeconds <= 0 {
 		c.RequestTimeoutSeconds = 600

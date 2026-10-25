@@ -49,7 +49,7 @@ plugins:
       enabled: true
       base_url: "https://api.river.ai/v1"
       request_timeout_seconds: 600
-      log_retention: 500
+      log_retention: 1000
 ```
 
 Restart CPA and look for the registration line:
@@ -111,7 +111,7 @@ runtime through the console, which persists to
 | `strategy` | `fill-first` | `fill-first` or `round-robin` |
 | `retry_on_failure` | `true` | Cool a failed key down and try another |
 | `disabled_models` | `[]` | Models blocked across every key |
-| `log_retention` | `300` | Diagnostic log lines kept in memory |
+| `log_retention` | `1000` | Request rows kept on disk (50–10000, same range as ClinePassBridge) |
 | `request_timeout_seconds` | `600` | One upstream call's deadline |
 | `include_stream_usage` | `true` | Ask River for usage on streaming calls |
 
