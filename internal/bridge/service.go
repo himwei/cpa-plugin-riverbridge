@@ -50,16 +50,16 @@ type Service struct {
 // before anything else.
 func NewService() *Service {
 	return &Service{
-		cfg:      defaultConfig(),
-		creds:    map[string]Credential{},
-		files:    map[string]string{},
-		revoked:  map[string]bool{},
-		started:  time.Now(),
-		logs:     newLogRing("", defaultConfig().LogRetention),
-		usage:    newUsageStore(),
-		stats:    newStatisticsStore(""),
-		rr:       newRoundRobin(),
-		cooldown: newCooldowns(90 * time.Second),
+		cfg:       defaultConfig(),
+		creds:     map[string]Credential{},
+		files:     map[string]string{},
+		revoked:   map[string]bool{},
+		started:   time.Now(),
+		logs:      newLogRing("", defaultConfig().LogRetention),
+		usage:     newUsageStore(),
+		stats:     newStatisticsStore(""),
+		rr:        newRoundRobin(),
+		cooldown:  newCooldowns(90 * time.Second),
 		stopFlush: make(chan struct{}),
 	}
 }
