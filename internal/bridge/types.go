@@ -19,7 +19,7 @@ const (
 	PluginID   = "riverbridge"
 	Provider   = "river"
 	Name       = "RiverBridge"
-	Version    = "0.3.0"
+	Version    = "0.3.1"
 	Repository = "https://github.com/himwei/cpa-plugin-riverbridge"
 
 	// ModelPrefix separates River models from every other provider's models in

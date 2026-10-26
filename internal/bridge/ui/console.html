@@ -428,9 +428,9 @@ tr.lvl-error td { color: var(--err); }
         <div><label>账号</label><select id="fAuth"><option value="all">全部</option></select></div>
         <div><label>模型</label><select id="fModel"><option value="all">全部</option></select></div>
         <div><label>类型</label><select id="fKind">
-          <option value="all">全部</option>
-          <option value="request">仅请求</option>
+          <option value="request" selected>仅请求</option>
           <option value="event">仅事件</option>
+          <option value="all">全部</option>
         </select></div>
         <div style="flex:1.4"><label>关键字</label><input type="text" id="fQuery" placeholder="状态码、错误、模型…"></div>
       </div>
@@ -857,7 +857,7 @@ async function loadLogs() {
       empty.style.display = "";
       // An empty list under a time filter looks like a broken page. Say which
       // window came up empty and offer the one call that widens it.
-      if (logRange !== "all" && !q && !level && !model && !auth && !kind) {
+      if (logRange !== "all" && !q && !level && !model && !auth && (!kind || kind === "all")) {
         empty.innerHTML = `今天还没有记录 · <a href="#" id="widenRange">查看全部时间</a>`;
         const widen = $("widenRange");
         if (widen) widen.onclick = (ev) => {
