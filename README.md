@@ -14,6 +14,21 @@ river-glm-5.3-flash              zai-org/GLM-5.3-Flash
 river-kimi-k3                    moonshotai/Kimi-K3
 ```
 
+## Why this exists
+
+Every CLIProxyAPI provider keeps its own credentials, its own quota accounting
+and its own idea of what a model costs. River was cheap enough to be worth
+routing through, but there was no way to hand CPA a River key and stop
+thinking about it: which key paid for the last request, how much of the balance
+is gone, and which of the six models are worth keeping enabled all had to live
+somewhere outside CPA.
+
+RiverBridge is that somewhere. It started as a personal setup — one key, a
+spending ceiling, a log that survives a restart — and it is published because
+the same shape fits anyone running CPA against a metered upstream. It assumes
+one operator, not a team: there is no tenancy, no RBAC, and the console trusts
+CPA's own management key to decide who gets in.
+
 ## Why the `river-` prefix
 
 CPA shares one flat model namespace across every provider. River serves models
@@ -194,8 +209,10 @@ go test ./...           # unit tests
 gmake freebsd           # C shared object for FreeBSD/amd64
 ```
 
-Requires Go 1.26+ and, for the shared object, a C compiler
-(`CGO_ENABLED=1`).
+Requires Go 1.21+ and, for the shared object, a C compiler
+(`CGO_ENABLED=1`). The `go.mod` directive says 1.26 because that is what the
+reference FreeBSD build uses; nothing in the plugin needs anything newer
+than 1.21, so an older toolchain builds it too.
 
 ## Layout
 
