@@ -75,7 +75,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/himwei/riverbridge/internal/bridge"
+	"github.com/himwei/cpa-plugin-riverbridge/internal/bridge"
 )
 
 const abiVersion = 1

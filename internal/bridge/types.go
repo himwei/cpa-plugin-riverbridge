@@ -20,7 +20,7 @@ const (
 	Provider   = "river"
 	Name       = "RiverBridge"
 	Version    = "0.3.0"
-	Repository = "https://github.com/himwei/riverbridge"
+	Repository = "https://github.com/himwei/cpa-plugin-riverbridge"
 
 	// ModelPrefix separates River models from every other provider's models in
 	// CPA's shared /v1/models namespace.

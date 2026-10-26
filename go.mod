@@ -1,4 +1,4 @@
-module github.com/himwei/riverbridge
+module github.com/himwei/cpa-plugin-riverbridge
 
 go 1.26.0
 
