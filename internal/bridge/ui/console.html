@@ -192,6 +192,14 @@ button:disabled { opacity: .5; cursor: default; }
 table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 500; font-size: 11.5px; }
+/* The model table is the one place where the ordering itself carries meaning:
+   an operator scanning it is deciding what to route traffic to, and "cheapest
+   input" is a real question. Only columns with a numeric key get the affordance. */
+th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.sortable:hover { color: var(--text); }
+th.sortable::after { content: "⇅"; margin-left: 4px; opacity: .3; font-size: 10px; }
+th.sorted-asc::after { content: "▲"; opacity: 1; }
+th.sorted-desc::after { content: "▼"; opacity: 1; }
 td code, th code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 tr.lvl-warn td { color: var(--warn); }
 tr.lvl-error td { color: var(--err); }
@@ -584,9 +592,14 @@ tr.lvl-error td { color: var(--err); }
         <span class="hint">价格单位 USD / 百万 tokens，与 River 公布价一致</span></h2>
       <div style="overflow:auto">
         <table id="models">
-          <thead><tr><th>对外模型名</th><th>上游模型</th><th>上下文</th><th>最大输出</th>
-            <th style="text-align:right">输入</th><th style="text-align:right">缓存</th>
-            <th style="text-align:right">输出</th><th style="text-align:right">可用账号</th></tr></thead>
+          <thead><tr><th class="sortable" data-sort="id">对外模型名</th>
+            <th>上游模型</th>
+            <th class="sortable" data-sort="context_length" style="text-align:right">上下文</th>
+            <th class="sortable" data-sort="max_output_tokens" style="text-align:right">最大输出</th>
+            <th class="sortable sorted-asc" data-sort="input" style="text-align:right">输入</th>
+            <th class="sortable" data-sort="cached" style="text-align:right">缓存</th>
+            <th class="sortable" data-sort="output" style="text-align:right">输出</th>
+            <th class="sortable" data-sort="creds" style="text-align:right">可用账号</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -1525,36 +1538,105 @@ $("reloadSettings").addEventListener("click", () => loadSettings());
 
 /* ---------- models ---------- */
 
-async function loadModels() {
-  try {
-    const data = await call("/models");
-    const list = data.models || [];
-    $("modelCount").textContent = list.length ? `（${list.length}）` : "";
-    const tbody = $("models").querySelector("tbody");
-    if (!list.length) {
-      tbody.innerHTML = '<tr><td colspan="8" class="empty">还没有可用模型</td></tr>';
-      return;
+// The server returns the catalogue ordered by id, which is stable but says
+// nothing about what the models cost. Keep the rows here so re-sorting does not
+// cost another round trip, and default to cheapest input: that is the question
+// an operator opens this table with.
+let modelRows = [];
+let modelSort = { key: "input", desc: false };
+
+function modelSortValue(m, key) {
+  const p = m.pricing || {};
+  switch (key) {
+    case "id": return m.id || "";
+    case "context_length": return m.context_length || 0;
+    case "max_output_tokens": return m.max_output_tokens || 0;
+    case "input": return p.input_usd_per_million || 0;
+    case "cached": return p.cached_usd_per_million || 0;
+    case "output": return p.output_usd_per_million || 0;
+    case "creds": return (m.credentials || []).length;
+    default: return 0;
+  }
+}
+
+function sortModelRows() {
+  const { key, desc } = modelSort;
+  const numeric = key !== "id";
+  modelRows.sort((a, b) => {
+    const av = modelSortValue(a, key);
+    const bv = modelSortValue(b, key);
+    // A zero price means the provider publishes no rate for that model, not
+    // that it is free. Those rows belong at the bottom in either direction,
+    // otherwise "cheapest output" would lead with the models priced unknown.
+    if (numeric) {
+      const az = !av, bz = !bv;
+      if (az !== bz) return az ? 1 : -1;
     }
-    tbody.innerHTML = list.map((m) => {
-      const p = m.pricing || {};
-      const rate = (v) => (v ? "$" + money(v) : "—");
-      return `
+    let d;
+    if (numeric) d = av - bv;
+    else d = String(av).localeCompare(String(bv));
+    if (d === 0) d = String(a.id).localeCompare(String(b.id));
+    return desc ? -d : d;
+  });
+}
+
+function renderModelRows() {
+  const tbody = $("models").querySelector("tbody");
+  if (!modelRows.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">还没有可用模型</td></tr>';
+    return;
+  }
+  tbody.innerHTML = modelRows.map((m) => {
+    const p = m.pricing || {};
+    const rate = (v) => (v ? "$" + money(v) : "—");
+    return `
       <tr>
         <td><code>${escapeHTML(m.id)}</code></td>
         <td><code>${escapeHTML(m.upstream)}</code></td>
-        <td>${m.context_length ? fmtNum(m.context_length) : "—"}</td>
-        <td>${m.max_output_tokens ? fmtNum(m.max_output_tokens) : "—"}</td>
+        <td style="text-align:right">${m.context_length ? fmtNum(m.context_length) : "—"}</td>
+        <td style="text-align:right">${m.max_output_tokens ? fmtNum(m.max_output_tokens) : "—"}</td>
         <td style="text-align:right">${rate(p.input_usd_per_million)}</td>
         <td style="text-align:right">${rate(p.cached_usd_per_million)}</td>
         <td style="text-align:right">${rate(p.output_usd_per_million)}</td>
         <td style="text-align:right">${fmtNum((m.credentials || []).length)}</td>
       </tr>`;
-    }).join("");
+  }).join("");
+  for (const th of $("models").querySelectorAll("th.sortable")) {
+    th.classList.remove("sorted-asc", "sorted-desc");
+    if (th.dataset.sort === modelSort.key) {
+      th.classList.add(modelSort.desc ? "sorted-desc" : "sorted-asc");
+    }
+  }
+}
+
+async function loadModels() {
+  try {
+    const data = await call("/models");
+    modelRows = data.models || [];
+    $("modelCount").textContent = modelRows.length ? `（${modelRows.length}）` : "";
+    sortModelRows();
+    renderModelRows();
   } catch (e) {
+    modelRows = [];
     $("models").querySelector("tbody").innerHTML =
       `<tr><td colspan="8" class="empty">${escapeHTML(e.message)}</td></tr>`;
   }
 }
+
+$("models").querySelector("thead").addEventListener("click", (ev) => {
+  const th = ev.target.closest("th.sortable");
+  if (!th) return;
+  const key = th.dataset.sort;
+  // Clicking the active column flips it; a new column starts ascending, which
+  // for every numeric column here means "least first" — the cheap end.
+  if (modelSort.key === key) {
+    modelSort.desc = !modelSort.desc;
+  } else {
+    modelSort = { key, desc: false };
+  }
+  sortModelRows();
+  renderModelRows();
+});
 
 /* money keeps small rates readable: 0.0024 must not render as $0.00. */
 function money(v) {
