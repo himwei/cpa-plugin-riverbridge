@@ -75,6 +75,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      # gh needs a git repo for --generate-notes (it walks previous tags), and
+      # fetch-depth: 0 is required so those tags are actually present.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v4
         with:
           name: riverbridge-freebsd-amd64
