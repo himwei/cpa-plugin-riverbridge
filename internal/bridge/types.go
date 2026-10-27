@@ -19,7 +19,7 @@ const (
 	PluginID   = "riverbridge"
 	Provider   = "river"
 	Name       = "RiverBridge"
-	Version    = "0.3.2"
+	Version    = "0.3.3"
 	Repository = "https://github.com/himwei/cpa-plugin-riverbridge"
 
 	// ModelPrefix separates River models from every other provider's models in
@@ -236,6 +236,15 @@ const (
 	MaxLogRetention     = 10000
 )
 
+// Response size bounds. Same default and range as ClinePassBridge's
+// max_response_bytes, so an operator moving between the two consoles sees one
+// set of numbers rather than two different definitions of "too big".
+const (
+	DefaultMaxResponseBytes = 64 << 20
+	MinMaxResponseBytes     = 64 << 10
+	MaxMaxResponseBytes     = 64 << 20
+)
+
 // Routing strategies. "fill-first" keeps using the highest-priority enabled
 // key until it fails, which preserves prompt-cache affinity. "round-robin"
 // spreads requests across every enabled key.
@@ -265,6 +274,11 @@ type Config struct {
 	// DisabledModels applies to every credential, in addition to the per-key
 	// list. Useful for retiring a model account-wide.
 	DisabledModels []string `json:"disabled_models" yaml:"disabled_models"`
+	// MaxResponseBytes bounds one upstream response body, streamed or not.
+	// The stream loop used to forward every frame without counting them and the
+	// non-streaming path called io.ReadAll on an unbounded body, so a runaway
+	// or pathological upstream could grow the host process until it was killed.
+	MaxResponseBytes int `json:"max_response_bytes" yaml:"max_response_bytes"`
 }
 
 func defaultConfig() Config {
@@ -276,6 +290,7 @@ func defaultConfig() Config {
 		IncludeStreamUsage:    true,
 		Strategy:              StrategyFillFirst,
 		RetryOnFailure:        true,
+		MaxResponseBytes:      DefaultMaxResponseBytes,
 	}
 }
 
@@ -292,6 +307,19 @@ func (c *Config) normalize() {
 	}
 	if c.RequestTimeoutSeconds <= 0 {
 		c.RequestTimeoutSeconds = 600
+	}
+	// Zero means "written before this setting existed", so it takes the
+	// default. A value below the minimum is clamped up rather than rejected
+	// here: normalize also runs on load, and refusing to start over a stale
+	// settings.json would be worse than widening the bound.
+	if c.MaxResponseBytes <= 0 {
+		c.MaxResponseBytes = DefaultMaxResponseBytes
+	}
+	if c.MaxResponseBytes < MinMaxResponseBytes {
+		c.MaxResponseBytes = MinMaxResponseBytes
+	}
+	if c.MaxResponseBytes > MaxMaxResponseBytes {
+		c.MaxResponseBytes = MaxMaxResponseBytes
 	}
 	// Accept the same aliases CPA's own routing endpoint takes, so a value
 	// pasted from there behaves identically here instead of silently reverting

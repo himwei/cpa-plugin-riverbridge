@@ -563,6 +563,10 @@ tr.lvl-error td { color: var(--err); }
           <input type="number" id="sTimeout" min="10" max="3600" step="10">
         </div>
         <div>
+          <label for="sMaxResp">最大响应大小（MiB）</label>
+          <input type="number" id="sMaxResp" min="0.0625" max="64" step="1">
+        </div>
+        <div>
           <label for="sBase">上游地址</label>
           <input type="text" id="sBase" placeholder="https://api.river.ai/v1">
         </div>
@@ -1401,16 +1405,26 @@ async function loadSettings() {
       <div class="k">上游地址</div><div class="v"><code>${escapeHTML(s.base_url || "")}</code></div>
       <div class="k">日志保留</div><div class="v">${escapeHTML(s.log_retention)} 条</div>
       <div class="k">请求超时</div><div class="v">${escapeHTML(s.request_timeout_seconds)} 秒</div>
+      <div class="k">最大响应</div><div class="v">${fmtMiB(s.max_response_bytes)} MiB</div>
       <div class="k">可用模型</div><div class="v">${(data.models || []).length} 个</div>`;
 
     $("sLogRetention").value = s.log_retention || 1000;
     $("sTimeout").value = s.request_timeout_seconds || 600;
+    $("sMaxResp").value = (s.max_response_bytes || 67108864) / 1048576;
     $("sBase").value = s.base_url || "";
     $("sStreamUsage").checked = s.include_stream_usage !== false;
     renderGlobalModels(data.models || [], s.disabled_models || []);
   } catch (e) {
     $("overview").innerHTML = `<div class="k">错误</div><div class="v">${escapeHTML(e.message)}</div>`;
   }
+}
+
+// fmtMiB renders a byte bound the way an operator set it, dropping the trailing
+// zeros so 64 MiB does not read as "64.00 MiB".
+function fmtMiB(bytes) {
+  if (!bytes) return "—";
+  const mib = bytes / 1048576;
+  return Number.isInteger(mib) ? String(mib) : mib.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 function fmtUptime(sec) {
@@ -1523,6 +1537,7 @@ $("saveSettings").addEventListener("click", async () => {
       body: JSON.stringify({
         log_retention: parseInt($("sLogRetention").value, 10) || 1000,
         request_timeout_seconds: parseInt($("sTimeout").value, 10) || 600,
+        max_response_bytes: Math.round((parseFloat($("sMaxResp").value) || 64) * 1048576),
         base_url: $("sBase").value.trim(),
         include_stream_usage: $("sStreamUsage").checked,
       }),

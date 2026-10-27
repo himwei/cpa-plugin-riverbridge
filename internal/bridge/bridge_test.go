@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -134,6 +135,11 @@ func TestConfigNormalizeFillsDefaults(t *testing.T) {
 	if c.LogRetention <= 0 || c.RequestTimeoutSeconds <= 0 {
 		t.Errorf("normalize left non-positive bounds: %+v", c)
 	}
+	// A zero MaxResponseBytes would make every response "oversized", so the
+	// default has to land inside the accepted range on its own.
+	if c.MaxResponseBytes < MinMaxResponseBytes || c.MaxResponseBytes > MaxMaxResponseBytes {
+		t.Errorf("normalize left max_response_bytes out of range: %d", c.MaxResponseBytes)
+	}
 	if c.BaseURL[len(c.BaseURL)-1] == '/' {
 		t.Errorf("normalize kept a trailing slash: %q", c.BaseURL)
 	}
@@ -185,6 +191,50 @@ func TestSSEPayloadStripsEnvelope(t *testing.T) {
 		}
 		if ok && string(got) != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, string(got), tc.want)
+		}
+	}
+}
+
+// An oversized upstream body has to surface as a request fault, not as a
+// truncated JSON body that still parses. ClinePassBridge reports 413 for the
+// same condition; matching it keeps client-side special cases working across
+// both plugins.
+func TestResponseLimitFailureIsRequestFault(t *testing.T) {
+	err := responseLimitFailure(MaxMaxResponseBytes)
+	if err == nil {
+		t.Fatal("responseLimitFailure returned nil")
+	}
+	message, status := HostErrorDetails(err)
+	if status != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want %d", status, http.StatusRequestEntityTooLarge)
+	}
+	if !strings.Contains(message, "67108864") {
+		t.Errorf("message does not name the limit: %q", message)
+	}
+	if r, ok := err.(interface{ Retryable() bool }); ok && r.Retryable() {
+		t.Error("an oversized response is retryable, which would loop")
+	}
+}
+
+// normalize runs on load as well as on save, so a settings.json written before
+// this bound existed (or one edited by hand) must not disable the protection
+// or reject the whole config.
+func TestNormalizeClampsResponseLimit(t *testing.T) {
+	cases := []struct {
+		name string
+		in   int
+		want int
+	}{
+		{"zero takes the default", 0, DefaultMaxResponseBytes},
+		{"below minimum clamps up", 1024, MinMaxResponseBytes},
+		{"above maximum clamps down", 1 << 30, MaxMaxResponseBytes},
+		{"in range is kept", 8 << 20, 8 << 20},
+	}
+	for _, tc := range cases {
+		c := Config{MaxResponseBytes: tc.in}
+		c.normalize()
+		if c.MaxResponseBytes != tc.want {
+			t.Errorf("%s: got %d, want %d", tc.name, c.MaxResponseBytes, tc.want)
 		}
 	}
 }

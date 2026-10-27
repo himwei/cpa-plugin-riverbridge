@@ -27,6 +27,7 @@ type settingsPatch struct {
 	RequestTimeoutSeconds *int      `json:"request_timeout_seconds"`
 	IncludeStreamUsage    *bool     `json:"include_stream_usage"`
 	BaseURL               *string   `json:"base_url"`
+	MaxResponseBytes      *int      `json:"max_response_bytes"`
 }
 
 // managementSettings reports the current configuration plus the runtime state
@@ -80,6 +81,7 @@ func (s *Service) managementSettings() (any, error) {
 			"include_stream_usage":    cfg.IncludeStreamUsage,
 			"base_url":                cfg.BaseURL,
 			"data_dir":                cfg.DataDir,
+			"max_response_bytes":      cfg.MaxResponseBytes,
 		},
 		"strategies": []map[string]string{
 			{"value": StrategyFillFirst, "label": "固定优先（fill-first）",
@@ -141,6 +143,17 @@ func (s *Service) managementSaveSettings(body []byte) (any, error) {
 	}
 	if req.BaseURL != nil {
 		cfg.BaseURL = *req.BaseURL
+	}
+	if req.MaxResponseBytes != nil {
+		cfg.MaxResponseBytes = *req.MaxResponseBytes
+	}
+	// Same treatment as log_retention: an out-of-range value is an error the
+	// operator can act on, not something to clamp behind their back.
+	if cfg.MaxResponseBytes < MinMaxResponseBytes || cfg.MaxResponseBytes > MaxMaxResponseBytes {
+		s.configMu.Unlock()
+		return managementJSON(http.StatusBadRequest, map[string]string{
+			"error": "max_response_bytes 必须在 64 KiB 到 64 MiB 之间",
+		})
 	}
 	cfg.normalize()
 	if err := writeSettingsLocked(cfg); err != nil {

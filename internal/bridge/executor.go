@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -141,7 +142,10 @@ func (s *Service) execute(raw json.RawMessage) (any, error) {
 	defer cancel()
 	defer func() { _ = resp.Body.Close() }()
 
-	payload, readErr := io.ReadAll(resp.Body)
+	// Read one byte past the limit so an oversized body is detectable rather
+	// than silently truncated into something that still parses as JSON.
+	limit := int64(s.config().MaxResponseBytes)
+	payload, readErr := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	elapsed := time.Since(started).Milliseconds()
 	if readErr != nil {
 		s.recordFailure(c.ID, r.Model, readErr.Error())
@@ -151,6 +155,16 @@ func (s *Service) execute(raw json.RawMessage) (any, error) {
 			Detail: "read upstream response: " + readErr.Error(),
 		})
 		return nil, fail(502, "reading River response failed: "+readErr.Error())
+	}
+	if int64(len(payload)) > limit {
+		msg := responseLimitMessage(limit)
+		s.recordFailure(c.ID, r.Model, msg)
+		s.logRequest(logEntry{
+			Level: "error", Model: r.Model, Upstream: upstream, AuthID: c.ID,
+			Status: http.StatusRequestEntityTooLarge, Millis: elapsed,
+			Detail: msg,
+		})
+		return nil, responseLimitFailure(limit)
 	}
 	if resp.StatusCode >= 400 {
 		mapped := mapUpstreamStatus(resp.StatusCode, payload)
@@ -267,6 +281,16 @@ func (s *Service) pumpStream(c Credential, r executorStreamRequest, upstream str
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64<<10), 8<<20)
 
+	// Bound the whole stream, not just one line. scanner.Buffer caps a single
+	// frame at 8 MiB; without a running total a long-lived stream could forward
+	// unlimited bytes through the host process.
+	limit := int64(s.config().MaxResponseBytes)
+	var consumed int64
+	// terminated marks a path that already closed the stream and recorded its
+	// own outcome, so the deferred summariser below must not overwrite it with
+	// a success.
+	var terminated bool
+
 	var usage *Usage
 	var sawDone bool
 	announced := false
@@ -312,6 +336,12 @@ func (s *Service) pumpStream(c Credential, r executorStreamRequest, upstream str
 			if !announced {
 				ready <- fail(502, msg)
 			}
+			return
+		}
+		if terminated {
+			// The path that set this flag already closed the stream and, when
+			// the caller was still waiting, answered it. Summarising here would
+			// rewrite an error outcome as a success.
 			return
 		}
 		if !announced {
@@ -366,17 +396,40 @@ func (s *Service) pumpStream(c Credential, r executorStreamRequest, upstream str
 		if r.requestPath() == "/v1/messages" {
 			frameBytes = append(append([]byte("data: "), frameBytes...), []byte("\n\n")...)
 		}
+		// Count what actually leaves the plugin, so the bound tracks the bytes
+		// the host has to hold rather than the raw upstream line length.
+		consumed += int64(len(frameBytes))
+		if consumed > limit {
+			terminated = true
+			msg := responseLimitMessage(limit)
+			s.recordFailure(c.ID, model, msg)
+			s.logRequest(logEntry{
+				Level: "error", Model: model, Upstream: upstream, AuthID: c.ID,
+				Millis: time.Since(started).Milliseconds(), FirstByteMs: firstByteMs,
+				Stream: true, Detail: msg,
+			})
+			closeStream(responseLimitFailure(limit))
+			if !announced {
+				ready <- responseLimitFailure(limit)
+			}
+			return
+		}
 		if err := emit(frameBytes); err != nil {
+			// The caller may have stopped reading; do not let the deferred
+			// summariser turn this into a success.
+			terminated = true
 			s.recordFailure(c.ID, model, "downstream stopped reading the stream")
 			s.logRequest(logEntry{
 				Level: "error", Model: model, Upstream: upstream, AuthID: c.ID,
 				Millis: time.Since(started).Milliseconds(), FirstByteMs: firstByteMs,
 				Stream: true, Detail: "stream emit: " + err.Error(),
 			})
+			closeStream(err)
 			return
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		terminated = true
 		s.recordFailure(c.ID, model, err.Error())
 		s.logRequest(logEntry{
 			Level: "error", Model: model, Upstream: upstream, AuthID: c.ID,
@@ -509,6 +562,24 @@ func mapUpstreamStatus(status int, body []byte) error {
 		return failRetry(status, code, msg)
 	}
 	return &pluginError{message: msg, code: code, status: status, retry: status >= 500}
+}
+
+// responseLimitMessage describes an oversized upstream body in the log, naming
+// the configured bound so the operator sees which knob to turn.
+func responseLimitMessage(limit int64) string {
+	return "upstream response exceeds max_response_bytes (" +
+		strconv.FormatInt(limit, 10) + " bytes)"
+}
+
+// responseLimitFailure is the error handed back to the host once a response
+// crosses max_response_bytes. 413 matches what ClinePassBridge reports for the
+// same condition, so a client that special-cases one plugin's oversized
+// response recognises the other's. Not retryable: the same request against the
+// same upstream would cross the same bound again.
+func responseLimitFailure(limit int64) error {
+	return failCode(http.StatusRequestEntityTooLarge, "river_response_too_large",
+		"River response exceeds the configured "+strconv.FormatInt(limit, 10)+
+			"-byte limit (max_response_bytes)")
 }
 
 // responseHeaders keeps only the headers worth forwarding downstream.
