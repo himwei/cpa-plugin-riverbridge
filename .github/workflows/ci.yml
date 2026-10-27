@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
 
 jobs:
@@ -21,9 +22,45 @@ jobs:
       - name: Test
         run: go test ./... -race
 
-      - name: Build shared object
-        run: |
-          CGO_ENABLED=1 go build -buildmode=c-shared \
-            -trimpath -buildvcs=false \
-            -o /tmp/riverbridge.so ./cmd/riverbridge/
-          ls -l /tmp/riverbridge.so
+  # The plugin is loaded by CLIProxyAPI on FreeBSD, so the deliverable has to be
+  # a FreeBSD shared object. Building it on ubuntu yields a linux .so that CPA
+  # cannot load at all -- hence the VM.
+  build-freebsd:
+    name: Build FreeBSD .so
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build inside FreeBSD
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.3"
+          usesh: true
+          prepare: |
+            pkg install -y curl ca_root_nss
+          run: |
+            set -eu
+            curl -fsSL -o /tmp/go.tgz https://go.dev/dl/go1.26.10.freebsd-amd64.tar.gz
+            rm -rf /usr/local/go
+            tar -C /usr/local -xzf /tmp/go.tgz
+            export PATH=/usr/local/go/bin:$PATH
+            go version
+
+            VER=$(grep -oE 'Version[[:space:]]*=[[:space:]]*"[^"]+"' internal/bridge/types.go \
+                  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+            echo "plugin version: $VER"
+
+            mkdir -p dist
+            CGO_ENABLED=1 GOOS=freebsd GOARCH=amd64 \
+              go build -buildmode=c-shared -trimpath -buildvcs=false \
+              -ldflags='-s -w' -o "dist/riverbridge-$VER.so" ./cmd/riverbridge/
+
+            ls -l dist/
+            echo "sha256:"; sha256 -q "dist/riverbridge-$VER.so"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: riverbridge-freebsd-amd64
+          path: dist/*.so
+          if-no-files-found: error
+          retention-days: 90
