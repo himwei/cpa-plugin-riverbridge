@@ -63,3 +63,47 @@ jobs:
           path: dist/*.so
           if-no-files-found: error
           retention-days: 90
+
+  # Release assets are plain HTTPS downloads, so the server can fetch them with
+  # curl alone -- unlike Actions artifacts, which need an API token. Push a tag
+  # (e.g. `git tag v0.3.1 && git push origin v0.3.1`) to publish.
+  release:
+    name: Publish release assets
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-freebsd
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: riverbridge-freebsd-amd64
+          path: dist
+
+      # Guard against publishing v0.3.2 that still reports Version = "0.3.1":
+      # the asset filename comes from types.go, the tag comes from the ref.
+      - name: Check tag matches plugin version
+        run: |
+          set -eu
+          want="${GITHUB_REF_NAME#v}"
+          have=$(basename dist/*.so | sed -E 's/.*-([0-9]+\.[0-9]+\.[0-9]+)\.so/\1/')
+          echo "tag=$want  built=$have"
+          if [ "$want" != "$have" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Version \"$have\" in internal/bridge/types.go"
+            exit 1
+          fi
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum *.so > checksums.txt
+          cat checksums.txt
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/*.so dist/checksums.txt
