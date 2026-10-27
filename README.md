@@ -1,5 +1,7 @@
 # RiverBridge
 
+> **English** | [简体中文](README.zh-CN.md)
+
 A [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) plugin that turns
 [River AI](https://docs.river.ai) inference into a first-class CPA provider.
 
@@ -70,7 +72,7 @@ plugins:
 Restart CPA and look for the registration line:
 
 ```
-pluginhost: plugin registered plugin_id=riverbridge plugin_name=RiverBridge version=0.1.0
+pluginhost: plugin registered plugin_id=riverbridge plugin_name=RiverBridge version=0.3.1
 ```
 
 ## Use
@@ -90,11 +92,31 @@ accumulated cost.
 The console has four tabs:
 
 - **日志 (logs)** — every request, newest first, filterable by level, account,
-  model and free text. Paged, with NDJSON export.
+  model and free text. Paged, with NDJSON export. Opens on today and on
+  request-kind rows only, so a restart's `settings saved ...` chatter does not
+  bury the traffic you came to read.
 - **账号配置 (accounts)** — one card per key: enable/disable it, rename it, set a
   priority or a spending ceiling, and switch individual models off. A model you
   switch off stops appearing in `/v1/models` for that key instead of failing at
   request time.
+- **路由策略 (routing)** — fill-first (always use the highest-priority enabled
+  key) or round-robin (spread across keys), plus retry-on-failure.
+- **设置概览 (settings)** — runtime overview, log retention, request timeout,
+  and models blocked across every key.
+
+The console's API calls go to `/v0/management/riverbridge/*`, which CPA guards
+with the management key. If you are logged into CPA's management center with
+"remember credentials" on, RiverBridge reuses that session; otherwise it shows
+an unlock dialog.
+
+Then chat through CPA as usual:
+
+```sh
+curl http://127.0.0.1:56466/v1/chat/completions \
+  -H "Authorization: Bearer $CPA_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"river-deepseek-v4.1-flash-1017","messages":[{"role":"user","content":"hi"}]}'
+```
 
 ### Spending ceilings
 
@@ -114,24 +136,6 @@ console. It is not answered with `403`: CPA remembers a 403 against that auth
 and keeps skipping it afterwards, so the key would stay dark even after a
 top-up. Raising the ceiling (or pressing 重置已用 after paying) returns it to
 service within a request, with no restart.
-- **路由策略 (routing)** — fill-first (always use the highest-priority enabled
-  key) or round-robin (spread across keys), plus retry-on-failure.
-- **设置概览 (settings)** — runtime overview, log retention, request timeout,
-  and models blocked across every key.
-
-The console's API calls go to `/v0/management/riverbridge/*`, which CPA guards
-with the management key. If you are logged into CPA's management center with
-"remember credentials" on, RiverBridge reuses that session; otherwise it shows
-an unlock dialog.
-
-Then chat through CPA as usual:
-
-```sh
-curl http://127.0.0.1:56466/v1/chat/completions \
-  -H "Authorization: Bearer $CPA_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"river-deepseek-v4.1-flash-1017","messages":[{"role":"user","content":"hi"}]}'
-```
 
 ## Configuration
 
@@ -213,6 +217,22 @@ Requires Go 1.21+ and, for the shared object, a C compiler
 (`CGO_ENABLED=1`). The `go.mod` directive says 1.26 because that is what the
 reference FreeBSD build uses; nothing in the plugin needs anything newer
 than 1.21, so an older toolchain builds it too.
+
+### Publishing a version
+
+Release notes are written by hand in Chinese, not generated from the commit
+log. A release goes like this:
+
+1. Bump `Version` in `internal/bridge/types.go`, and commit it together with
+   that version's Chinese notes.
+2. Put the notes at `docs/release-notes/<tag>.md` (e.g.
+   `docs/release-notes/v0.3.1.md`).
+3. `git tag -a v0.3.1 -m "..."` then `git push origin main --follow-tags`.
+
+CI publishes `docs/release-notes/<tag>.md` as the release body. If the file is
+missing it falls back to `--generate-notes` and emits a warning instead of
+failing. The notes must be pushed **before** the tag: the workflow is taken
+from the commit the tag points at, not from `main` HEAD.
 
 ## Layout
 

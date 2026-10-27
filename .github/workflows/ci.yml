@@ -105,11 +105,26 @@ jobs:
           sha256sum *.so > checksums.txt
           cat checksums.txt
 
+      # Release notes are written by hand in Chinese at
+      # docs/release-notes/<tag>.md and committed BEFORE the tag is pushed, so the
+      # text is reviewable in a PR instead of being generated at publish time.
+      # --generate-notes stays as the fallback so a forgotten file still ships.
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes \
-            dist/*.so dist/checksums.txt
+          set -eu
+          notes="docs/release-notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$notes" ]; then
+            echo "release notes: $notes"
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file "$notes" \
+              dist/*.so dist/checksums.txt
+          else
+            echo "::warning::$notes not found, falling back to --generate-notes"
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes \
+              dist/*.so dist/checksums.txt
+          fi
